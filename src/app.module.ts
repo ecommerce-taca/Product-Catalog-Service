@@ -8,6 +8,7 @@ import { OutboxModule } from './outbox/outbox.module';
 import { AuditModule } from './audit/audit.module';
 import { HealthModule } from './health/health.module';
 import { CategoryModule } from './category/category.module';
+import { AttributeModule } from './attribute/attribute.module';
 import { TraceContextMiddleware } from './common/middleware/trace-context.middleware';
 import { ActorContextGuard } from './common/guards/actor-context.guard';
 import { ResponseEnvelopeInterceptor } from './common/interceptors/response-envelope.interceptor';
@@ -24,6 +25,7 @@ import { GlobalExceptionFilter } from './common/filters/global-exception.filter'
     AuditModule,
     HealthModule,
     CategoryModule,
+    AttributeModule,
   ],
   providers: [
     {
