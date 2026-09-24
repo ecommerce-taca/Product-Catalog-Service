@@ -194,23 +194,7 @@ Mở terminal hoặc trình duyệt gửi request kiểm tra:
 
 ---
 
-## 7. Kiểm Thử API với Postman MCP (Postman Collection)
-
-Bộ API Collection và Environment kiểm thử đã được tích hợp và đồng bộ tự động trên **Postman Cloud Workspace**:
-- **Workspace**: `Do ThanhTan's Workspace`
-- **Collection**: `Product Catalog Service API` (`5dcdf919-18bb-4395-ba94-f6dcb6d0be6c`)
-- **Environment**: `Product Catalog - Local Dev` (`baseUrl: http://localhost:3000`)
-- **File cấu hình dự án**: [`.postman.json`](./.postman.json)
-
-Mỗi request trong Collection đều được đính kèm kịch bản kiểm thử tự động (Pre-request Script & Tests) xác thực:
-- HTTP Status Code (200, 201, 400, 404, 409).
-- Ràng buộc cấu trúc Envelope `{ data, meta }` hoặc `{ error: { code, message, trace_id } }`.
-- Serialization kiểu dữ liệu tiền tệ integer number.
-- Ngữ cảnh bảo mật phân quyền (`X-User-Roles`, `X-User-Permissions`).
-
----
-
-## 8. Các Lệnh Thường Dùng (Scripts Reference)
+## 7. Các Lệnh Thường Dùng (Scripts Reference)
 
 ```bash
 # Định dạng và kiểm tra chuẩn mã nguồn
@@ -227,6 +211,6 @@ npm run start:dev     # Chạy chế độ development với hot-reload
 
 ---
 
-## 9. Giấy Phép & Tác Giả (License)
+## 8. Giấy Phép & Tác Giả (License)
 
 Dự án phát triển nội bộ bởi đội ngũ kỹ sư **Taca Ecommerce Platform**. Mọi quyền được bảo lưu.
