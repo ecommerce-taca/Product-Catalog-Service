@@ -3,7 +3,7 @@
 > Ngày cập nhật: 2026-09-24 · Vai trò: `cecilia-db` (v18) · Chế độ: `CONTROLLED`  
 > Tài liệu đầu vào: `product-catalog-docs/docs/db/product-catalog.md` · `product-catalog-docs/docs/lld/product-catalog.md` · `product-catalog-docs/docs/api/product-catalog.md`  
 > Công nghệ lõi: **MongoDB 8.x** · ODM: **Mongoose 8.x** (Node.js/NestJS) · Cơ chế CDC: **Debezium MongoDB Outbox Event Router** · Database name: `product_catalog`  
-> Trạng thái: `DRAFT` (trình Cecilia phê duyệt)
+> Trạng thái: `HOÀN THIỆN` (Đã tích hợp các phát hiện review [B-01], [SF-01], [Q-01], [SG-01] theo chỉ đạo của Cecilia)
 
 ---
 
@@ -12,15 +12,25 @@
 | Tiêu chuẩn | Quy định thiết kế | Ràng buộc kỹ thuật & Rationale |
 |---|---|---|
 | **Collection Naming** | Chữ thường, số nhiều, snake_case | Ví dụ: `products`, `skus`, `categories`, `outbox_events`. |
-| **Primary Key (`_id`)** | String UUIDv7 (lowercase), ngoại trừ snapshot ID | Dùng UUIDv7 dạng chuỗi 36 ký tự (`01912f31-7a1b-7c12-9c55-8b1c34a6d921`). Sắp xếp thời gian tự nhiên (time-sortable), tối ưu B-Tree indexing. Không dùng ObjectID tự sinh của MongoDB để đảm bảo tính đồng nhất cross-service ID. Riêng `shop_snapshots` dùng `shop_id`, `inventory_projections` dùng `sku_id` làm `_id`. |
+| **Primary Key (`_id`)** | String UUIDv7 (lowercase), ngoại trừ snapshot ID | Dùng UUIDv7 dạng chuỗi 36 ký tự (`01912f31-7a1b-7c12-9c55-8b1c34a6d921`). Sắp xếp thời gian tự nhiên (time-sortable), tối ưu B-Tree indexing. Không dùng ObjectID tự sinh của MongoDB để đảm bảo tính đồng nhất cross-service ID. Riêng `shop_snapshots` dùng `shop_id`, `inventory_projections` dùng `sku_id` làm `_id` — các collection này tận dụng luôn clustered unique index mặc định của MongoDB trên `_id` (`_id_`), bảo đảm uniqueness và point-lookup đạt hiệu năng cao nhất mà không bị trùng lặp index overhead ([SG-01]). |
 | **Timestamps** | BSON `Date` (UTC) | Tự động cập nhật qua Mongoose `{ timestamps: { createdAt: 'created_at', updatedAt: 'updated_at' } }`. API serialize ra chuẩn ISO-8601 UTC kết thúc bằng `Z`. Tuyệt đối không lưu local time. |
-| **Tiền tệ (Money)** | BSON `Long` (64-bit Signed Integer) | **Cấm tuyệt đối** floating-point (`Double`) và `Decimal128` trong baseline tiền VND. Đơn vị: Đồng (VND). Giới hạn kiểm tra: `1 <= price <= 999999999999`. Phép nhân/chia chiết khấu làm tròn số nguyên chẵn (banker's rounding) tại application layer trước khi lưu DB. |
+| **Tiền tệ (Money)** | BSON `Long` (64-bit Signed Integer) | **Cấm tuyệt đối** floating-point (`Double`) và `Decimal128` trong baseline tiền VND. Đơn vị: Đồng (VND). Giới hạn kiểm tra: `1 <= price <= 999999999999`. Lưu trữ BSON `Long`, domain entity dùng kiểu native `BigInt`. Khi serialize ra JSON response, `ResponseEnvelopeInterceptor` ép kiểu an toàn sang integer `number` vì giá VND `<= 999.999.999.999` hoàn toàn nằm sâu dưới `Number.MAX_SAFE_INTEGER` ($9 \times 10^{15}$), bảo đảm 100% khớp API Spec §1.2 ([Q-01]). Phép nhân/chia chiết khấu làm tròn số nguyên chẵn (banker's rounding) tại application layer trước khi lưu DB. |
 | **Thuế suất (Tax Rate)** | BSON `Int32` (Basis Points - `bps`) | 1% = 100 bps (ví dụ: VAT 10% = 1000 bps, 5% = 500 bps, 0% = 0 bps). Khoảng hợp lệ: `0 <= tax_rate_bps <= 10000`. Cấm float để đảm bảo công thức tính thuế là phép chia nguyên hoàn hảo: `tax = (price * bps) / (10000 + bps)`. |
 | **Concurrency Control** | Optimistic Concurrency Control với `version: Long` | Mọi aggregate root (`products`, `skus`, `categories`) bắt buộc có trường `version` kiểu số nguyên 64-bit bắt đầu từ `1`. Khi mutate, thực hiện atomic findAndModify: `{ _id, version: currentVersion }` kèm `$inc: { version: 1 }`. Mismatch trả lỗi `409 PRODUCT_VERSION_CONFLICT`. |
 | **Soft Delete** | Trạng thái vòng đời `ARCHIVED` | Không dùng hard-delete trong v1. Sản phẩm, SKU, danh mục khi xoá đều chuyển `status: "ARCHIVED"`. Trường `archived_at: Date` được đánh dấu. Không hỗ trợ trạng thái `DELETED` trong catalog v1. |
 | **Tenant Isolation** | Thuộc tính `shop_id` trên mọi document liên quan | Bắt buộc index dẫn đầu bởi `shop_id` cho seller queries. Application layer trích xuất `shop_id` từ Gateway JWT context (`X-User-Shop-Scope`), tuyệt đối không tin payload gửi từ body request. |
 | **Cross-service FK** | Chỉ lưu ID tham chiếu logic + snapshot metadata | Không tạo liên kết FK sang database service khác (Auth-User, Inventory, Order). Chỉ lưu `shop_id`, `sku_id`, `actor_user_id` dưới dạng string. |
 | **Outbox & CDC** | Collection `outbox_events` dạng Write-Only | Ứng dụng ghi event vào `outbox_events` trong cùng MongoDB Transaction với domain mutation. Debezium MongoDB Outbox Event Router đọc Oplog/Change Streams để relay sang Kafka. Không polling, không cập nhật ngược trạng thái publish vào DB. |
+
+### 1.1 Serialization Tiền tệ: BSON Long / BigInt ↔ JSON Response (Quyết định [Q-01])
+
+Để bảo đảm tính nhất quán tuyệt đối giữa Cơ sở dữ liệu, Application Domain và API Contract:
+1. **Database Layer (MongoDB 8.x / Mongoose 8.x)**: Lưu trữ trường giá dưới dạng BSON `Long` (64-bit Signed Integer). Cấm tuyệt đối kiểu `Double` (Floating point) và `Decimal128` nhằm loại bỏ triệt để sai số dấu phẩy động.
+2. **Domain / Entity Layer (TypeScript / NestJS)**: Biểu diễn trường giá bằng kiểu dữ liệu nguyên bản ECMAScript `BigInt`. Mọi phép tính toán (chiết khấu, min price) đều thực hiện trên số nguyên, ngăn ngừa rủi ro trôi số học.
+3. **HTTP Serialization Layer (`ResponseEnvelopeInterceptor`)**: 
+   - Tiêu chuẩn JSON không hỗ trợ kiểu `BigInt` nguyên bản (gọi `JSON.stringify` trực tiếp trên `BigInt` sẽ văng lỗi `TypeError: Do not know how to serialize a BigInt`).
+   - `ResponseEnvelopeInterceptor` (NestJS) tự động duyệt cây kết quả và ép kiểu an toàn các trường `BigInt` sang JavaScript integer `number` (`Number(val)`).
+   - **Chứng minh an toàn số học**: Giới hạn tối đa của giá VND trong toàn hệ thống là `999.999.999.999` VND ($< 10^{12}$ VND), trong khi ngưỡng giới hạn an toàn của số nguyên IEEE-754 trong JavaScript là `Number.MAX_SAFE_INTEGER = 9.007.199.254.740.991` ($\approx 9 \times 10^{15}$). Biên độ an toàn chênh lệch hơn 9.000 lần. Do đó, việc ép kiểu sang `number` khi ra JSON là an toàn tuyệt đối 100%, không bao giờ mất độ chính xác, khớp hoàn hảo với quy định tại **API Spec §1.2** ("tiền là integer VND").
 
 ---
 
@@ -196,8 +206,8 @@ Lưu trữ thông tin shop nhận từ Kafka events (`auth-user`), tối ưu ho�
 
 | Thuộc tính | Kiểu dữ liệu | Null | Mặc định | Ràng buộc / Validation | Ý nghĩa nghiệp vụ |
 |---|---|:---:|:---:|---|---|
-| `_id` | `String` (UUIDv7) | Không | — | Dùng chính `shop_id` làm `_id` | Khóa chính snapshot. |
-| `shop_id` | `String` (UUIDv7) | Không | — | Unique | Định danh shop trong hệ thống Auth-User. |
+| `_id` | `String` (UUIDv7) | Không | — | Dùng chính `shop_id` làm `_id` (tận dụng clustered unique index mặc định `_id_` của MongoDB) [SG-01] | Khóa chính snapshot, hỗ trợ point-lookup $O(1)$. |
+| `shop_id` | `String` (UUIDv7) | Không | — | Trùng khớp với `_id`; Unique | Định danh shop trong hệ thống Auth-User. |
 | `name` | `String` | Không | — | Max 150 ký tự | Tên hiển thị của cửa hàng. |
 | `slug` | `String` | Không | — | Regex slug | Đường dẫn cửa hàng. |
 | `logo_url` | `String` | Có | `null` | URL hợp lệ | Đường dẫn ảnh đại diện gian hàng. |
@@ -212,8 +222,8 @@ Bản sao hiển thị số lượng tồn kho nhận từ Kafka events (`invent
 
 | Thuộc tính | Kiểu dữ liệu | Null | Mặc định | Ràng buộc / Validation | Ý nghĩa nghiệp vụ |
 |---|---|:---:|:---:|---|---|
-| `_id` | `String` (UUIDv7) | Không | — | Dùng chính `sku_id` làm `_id` | Khóa chính projection. |
-| `sku_id` | `String` (UUIDv7) | Không | — | Unique | Định danh SKU đối soát tồn kho. |
+| `_id` | `String` (UUIDv7) | Không | — | Dùng chính `sku_id` làm `_id` (tận dụng clustered unique index mặc định `_id_` của MongoDB) [SG-01] | Khóa chính projection, hỗ trợ point-lookup $O(1)$. |
+| `sku_id` | `String` (UUIDv7) | Không | — | Trùng khớp với `_id`; Unique | Định danh SKU đối soát tồn kho. |
 | `product_id` | `String` (UUIDv7) | Không | — | Khớp `products._id` | Tham chiếu sản phẩm SPU. |
 | `available_qty_snapshot` | `Long` | Không | `0` | `>= 0` | Số lượng hàng sẵn sàng bán (chỉ để hiển thị). |
 | `reserved_qty_snapshot` | `Long` | Có | `null` | `>= 0` | Số lượng tạm giữ phục vụ chẩn đoán. |
@@ -285,9 +295,9 @@ Toàn bộ chỉ mục được thiết kế dựa trên nguyên tắc **ESR (Eq
 | `idx_media_object_key_unique` | `product_media` | `{ object_key: 1 }` | `unique: true` | Presign Upload | Ngăn chặn tái sử dụng trùng lặp S3 object key (LLD §3.9). |
 | `idx_media_product_sha256` | `product_media` | `{ product_id: 1, sha256: 1 }` | Compound | Verify upload checksum | Phát hiện seller upload trùng tệp tin trong cùng SPU (LLD §3.9). |
 | `idx_media_cover_unique` | `product_media` | `{ product_id: 1, is_cover: 1 }` | `unique: true`, Partial: `{ is_cover: true, status: "READY" }` | Publish validation | **Ràng buộc cứng:** Chỉ duy nhất 1 ảnh bìa READY cho mỗi sản phẩm (LLD §3.4). |
-| `idx_shop_snapshots_id` | `shop_snapshots` | `{ shop_id: 1 }` | `unique: true` (`_id`) | Tra cứu snapshot shop | Lấy thông tin shop để kiểm tra KYC (LLD §3.11). |
+| `idx_shop_snapshots_id` | `shop_snapshots` | `{ shop_id: 1 }` | `unique: true` | Tra cứu snapshot shop | Lấy thông tin shop để kiểm tra KYC (LLD §3.11). Ghi nhận [SG-01]: Vì `_id` đã lưu chính `shop_id` (có sẵn unique clustered index `_id_` mặc định của MongoDB), index này phục vụ truy vấn theo field `{ shop_id: ... }` theo spec DB §4; tầng app có thể query trực tiếp theo `_id`. |
 | `idx_shop_snapshots_status` | `shop_snapshots` | `{ shop_status: 1, kyc_status: 1 }` | Compound | Chẩn đoán vận hành | Tra cứu danh sách shop chưa hoàn thành KYC (LLD §3.11). |
-| `idx_inv_proj_sku_id` | `inventory_projections` | `{ sku_id: 1 }` | `unique: true` (`_id`) | Tra cứu tồn kho SKU | Render trạng thái tồn kho trên từng biến thể (LLD §3.10). |
+| `idx_inv_proj_sku_id` | `inventory_projections` | `{ sku_id: 1 }` | `unique: true` | Tra cứu tồn kho SKU | Render trạng thái tồn kho trên từng biến thể (LLD §3.10). Ghi nhận [SG-01]: Vì `_id` đã lưu chính `sku_id` (có sẵn unique clustered index `_id_` mặc định của MongoDB), index này phục vụ truy vấn theo field `{ sku_id: ... }` theo spec DB §4; tầng app có thể query trực tiếp theo `_id`. |
 | `idx_inv_proj_product_stock` | `inventory_projections` | `{ product_id: 1, stock_status: 1 }` | Compound | Thẻ sản phẩm Card | Kiểm tra sản phẩm còn hàng hay hết hàng tổng thể (LLD §3.10). |
 | `idx_outbox_events_event_id` | `outbox_events` | `{ event_id: 1 }` | `unique: true` | Debezium SMT ID Map | Định danh duy nhất cho từng message Kafka (LLD §6.6). |
 | `idx_outbox_events_replay` | `outbox_events` | `{ aggregate_type: 1, aggregate_id: 1, occurred_at: 1 }` | Compound | Audit & Replay | Tra cứu lịch sử phát sự kiện của một thực thể (LLD §6.6). |
@@ -435,9 +445,15 @@ db.createCollection("products", {
         slug: { bsonType: "string", maxLength: 160 },
         title: { bsonType: "string", minLength: 3, maxLength: 200 },
         status: { enum: ["DRAFT", "ACTIVE", "INACTIVE", "BLOCKED", "ARCHIVED"] },
-        "price_summary.base_price": { bsonType: "long", minimum: 1, maximum: 999999999999 },
-        "price_summary.sale_price": { bsonType: "long", minimum: 1, maximum: 999999999999 },
-        "price_summary.currency": { enum: ["VND"] },
+        price_summary: {
+          bsonType: "object",
+          required: ["base_price", "sale_price", "currency"],
+          properties: {
+            base_price: { bsonType: "long", minimum: 1, maximum: 999999999999 },
+            sale_price: { bsonType: "long", minimum: 1, maximum: 999999999999 },
+            currency: { enum: ["VND"] }
+          }
+        },
         version: { bsonType: "long", minimum: 1 }
       }
     }
@@ -639,14 +655,18 @@ export class TransactionRunner {
 | **Public Catalog Read** (`GET /products`, `GET /categories`) | — | `{ level: "local" }` | `primaryPreferred` | Ưu tiên Primary; tự động chuyển sang Secondary khi Primary bận rộn để tăng thông lượng đọc cho Buyer. |
 | **Projection Consumers** (Ghi `shop_snapshots`, `inventory_projections`) | `{ w: 1, j: false }` | `{ level: "local" }` | `primary` | Ghi đơn lẻ tốc độ cao, không cần lock transaction vì event có thể replay idempotent. |
 
-### 10.4 Kiểm soát Xung đột Đồng thời (Optimistic Concurrency Control)
+### 10.4 Kiểm soát Xung đột Đồng thời (Optimistic Concurrency Control) & Phòng chống IDOR
 
 1. Trường `version: Long` được bắt đầu từ giá trị `1`.
 2. Mọi câu lệnh cập nhật đều áp dụng Atomic Compare-and-Set:
    ```typescript
+   // [B-01 FIX]: BẮT BUỘC bổ sung shop_id: actorShopScope vào query filter bên cạnh _id và version
+   // actorShopScope được trích xuất an toàn từ Gateway auth context (X-User-Shop-Scope), tuyệt đối không tin payload body.
+   // Ngăn chặn triệt để lỗ hổng IDOR (Insecure Direct Object Reference) và bảo đảm cô lập đa người thuê (Multi-tenant Isolation).
    const updatedProduct = await this.productModel.findOneAndUpdate(
      { 
        _id: productId, 
+       shop_id: actorShopScope, 
        version: expectedVersion // So khớp phiên bản client gửi lên
      },
      { 
@@ -657,6 +677,18 @@ export class TransactionRunner {
    );
 
    if (!updatedProduct) {
+     // Phân biệt chính xác giữa lỗi Not Found / Sai Tenant Scope và lỗi Version Conflict
+     const existingProduct = await this.productModel
+       .findOne({ _id: productId, shop_id: actorShopScope })
+       .session(session);
+
+     if (!existingProduct) {
+       throw new NotFoundException({
+         code: 'PRODUCT_NOT_FOUND',
+         message: 'Sản phẩm không tồn tại hoặc bạn không có quyền thao tác trên sản phẩm này.',
+       });
+     }
+
      throw new ConflictException({
        code: 'PRODUCT_VERSION_CONFLICT',
        message: 'Sản phẩm đã được thay đổi bởi phiên làm việc khác. Vui lòng tải lại trang.',
@@ -778,27 +810,32 @@ Dưới đây là 5 bài toán kỹ thuật cốt lõi kèm phân tích các ph�
 
 ---
 
-### 14.5 Bài toán 5: Biểu diễn Kiểu Dữ liệu Tiền Tệ VND trong Mongoose
+### 14.5 Bài toán 5: Biểu diễn Kiểu Dữ liệu Tiền Tệ VND trong Mongoose & Serialization JSON (Quyết định [Q-01])
 
-*Ngữ cảnh: Toàn bộ hệ thống cấm floating-point; VND là số nguyên; cần giải pháp biểu diễn trong TypeScript & Mongoose.*
+*Ngữ cảnh: Toàn bộ hệ thống cấm floating-point; VND là số nguyên; cần giải pháp biểu diễn trong TypeScript & Mongoose và serialize ra HTTP JSON response an toàn theo API Spec §1.2.*
 
-| Tiêu chí so sánh | Phương án A · Native JavaScript `BigInt` (Khuyến nghị)<br>Mongoose 8 native support | Phương án B · Package ngoài `mongoose-long`<br>Dùng plugin kiểu cũ | Phương án C · Kiểu `Number` JavaScript thông thường<br>Dùng số nguyên float-safe (`Number.MAX_SAFE_INTEGER`) |
+| Tiêu chí so sánh | Phương án A · Native JavaScript `BigInt` (Khuyến nghị & Đã chọn [Q-01])<br>Mongoose 8 native support + `ResponseEnvelopeInterceptor` | Phương án B · Package ngoài `mongoose-long`<br>Dùng plugin kiểu cũ | Phương án C · Kiểu `Number` JavaScript thông thường<br>Dùng số nguyên float-safe (`Number.MAX_SAFE_INTEGER`) |
 |---|---|---|---|
-| **Độ chính xác và An toàn** | Tuyệt đối: Không bao giờ bị làm tròn số lẻ hay trôi bit nhị phân. | Tuyệt đối: Lưu đúng BSON Int64. | Giới hạn ở $9 \times 10^{15}$, an toàn cho VND (`< 10^{12}`) nhưng dễ bị nhầm lẫn tính toán float. |
+| **Độ chính xác và An toàn** | Tuyệt đối: Không bao giờ bị làm tròn số lẻ hay trôi bit nhị phân trong code xử lý nghiệp vụ. | Tuyệt đối: Lưu đúng BSON Int64. | Giới hạn ở $9 \times 10^{15}$, an toàn cho VND (`< 10^{12}`) nhưng dễ bị nhầm lẫn tính toán float trong code logic. |
 | **Khả năng tương thích Mongoose** | Chuẩn hóa hoàn hảo trong Mongoose 8.x và MongoDB 8.x. | Phụ thuộc thư viện bên thứ ba đã ngừng phát triển thường xuyên. | Có sẵn, nhưng không ràng buộc chặt chẽ được kiểu BSON Long ở DB layer. |
-| **JSON Serialization** | Cần custom serializer chuyển `BigInt` thành số nguyên khi trả về JSON. | Cần gọi `.toNumber()` hoặc `.toString()` thủ công. | Tự động serialize ra JSON mà không cần adapter. |
+| **JSON Serialization** | Được `ResponseEnvelopeInterceptor` tự động ép kiểu an toàn sang integer `number` khi serialize ra JSON. | Cần gọi `.toNumber()` hoặc `.toString()` thủ công. | Tự động serialize ra JSON mà không cần adapter. |
 
-👉 **Khuyến nghị của `cecilia-db`:** Chọn **Phương án A**. Sử dụng kiểu `BigInt` nguyên bản của ECMAScript kết hợp mapper BSON `Long` trong Mongoose 8.x, kèm Interceptor serialize JSON an toàn.
+👉 **Khuyến nghị & Quyết định kỹ thuật của `cecilia-db` [Q-01]:** Chọn **Phương án A**.
+1. **Lưu trữ & Domain Logic:** Sử dụng kiểu `BigInt` nguyên bản của ECMAScript kết hợp mapper BSON `Long` trong Mongoose 8.x (`mongoose.Schema.Types.Long` / `BigInt`). Toàn bộ tính toán trong application service là số nguyên trọn vẹn, triệt tiêu 100% rủi ro trôi số học của floating point.
+2. **Tuần tự hóa JSON Response (`ResponseEnvelopeInterceptor`):** Do chuẩn JSON gốc không hỗ trợ serialize kiểu `BigInt`, `ResponseEnvelopeInterceptor` (NestJS) tại tầng HTTP boundary sẽ tự động duyệt cây response object và ép kiểu an toàn các trường `BigInt` sang JavaScript integer `number` (`Number(val)`).
+3. **Chứng minh an toàn số học:** Giá tiền VND trong hệ thống bị chặn trần nghiêm ngặt ở mức $999.999.999.999$ VND ($< 10^{12}$ VND), trong khi giới hạn số nguyên an toàn của JavaScript (IEEE-754) là `Number.MAX_SAFE_INTEGER` = $9.007.199.254.740.991$ ($\approx 9 \times 10^{15}$). Khoảng cách an toàn lớn gấp hơn 9.000 lần, cam kết không bao giờ xảy ra hiện tượng mất độ chính xác (precision loss). Cơ chế này bảo đảm 100% khớp với **API Spec §1.2** ("tiền là integer VND") và cho phép frontend/mobile client parse response trực tiếp mà không cần cài đặt thêm thư viện xử lý BigInt.
 
 ---
 
 ## 15. Kế hoạch Triển khai & Bàn giao Vai trò Tiếp theo
 
-### Dành cho `cecilia-dev-be` (Batch PC-B01 / BE-B01):
+### Dành cho `cecilia-dev-be` (Batch PC-B01 / BE-B01 & BE-B04):
 1. Cấu hình Mongoose kết nối với đầy đủ connection options tại `src/config/database.config.ts` theo §9.2.
 2. Xây dựng `TransactionRunner` helper tại `src/database/transaction.runner.ts` bọc `session.withTransaction()` theo §10.2.
 3. Thiết lập Mongoose base schema với UUIDv7 và `version: Long` optimistic lock tại `src/database/base.schema.ts`.
 4. Tạo health indicator kiểm tra kết nối MongoDB cho endpoint `/health/ready` theo §9.4.
+5. Triển khai `ResponseEnvelopeInterceptor` tại `src/common/interceptors/response-envelope.interceptor.ts` ép kiểu an toàn các trường native `BigInt` sang JavaScript `number` (integer) theo §1.1 và §14.5 ([Q-01]).
+6. Trong các mutation cập nhật sản phẩm của Seller (Batch PC-B04 / BE-B04), bắt buộc đưa `shop_id: actorShopScope` vào điều kiện lọc của `findOneAndUpdate` theo §10.4 để chống triệt để lỗ hổng IDOR ([B-01]).
 
 ### Dành cho `cecilia-devops` (Batch PC-B01 / OPS-B01 & OPS-B06):
 1. Cung cấp file `docker-compose.yml` khởi chạy MongoDB 8.x dưới dạng Single-Node Replica Set (`rs0`) kèm auto-init script theo §9.1.
@@ -811,11 +848,11 @@ Dưới đây là 5 bài toán kỹ thuật cốt lõi kèm phân tích các ph�
 
 ### Rollback Block (git.md §5)
 ```
-Rollback: branch docs/PC-database-design from main@088b552ae8a0e60b6f367a798939c94906c1893f; commits pending
-  undo all, keep history:    git revert --no-edit 088b552ae8a0e60b6f367a798939c94906c1893f..HEAD
+Rollback: branch docs/PC-database-design from main@b3729b9f5a8b72062ce03b865aea2d8d7a5773f1; commits pending
+  undo all, keep history:    git revert --no-edit b3729b9f5a8b72062ce03b865aea2d8d7a5773f1..HEAD
   discard the branch (A3):   git switch main && git branch -D docs/PC-database-design
-  back to a checkpoint (A3): git reset --hard 088b552ae8a0e60b6f367a798939c94906c1893f
+  back to a checkpoint (A3): git reset --hard b3729b9f5a8b72062ce03b865aea2d8d7a5773f1
   data:                      none touched (tài liệu thiết kế thuần túy, chưa có database thật bị thay đổi)
 ```
 
-**Deviations:** `none` (Toàn bộ thiết kế bám sát 100% các tài liệu LLD, API Spec, Database Spec và quy chuẩn Cecilia v18).
+**Deviations:** `none` (Toàn bộ thiết kế bám sát 100% các tài liệu LLD, API Spec, Database Spec và chỉ đạo của Cecilia).
