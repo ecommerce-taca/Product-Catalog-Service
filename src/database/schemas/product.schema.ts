@@ -12,11 +12,19 @@ export enum ProductStatus {
   ARCHIVED = 'ARCHIVED',
 }
 
-export interface ProductPriceSummary {
-  base_price: bigint | number;
-  sale_price: bigint | number;
+@Schema({ _id: false })
+export class ProductPriceSummary {
+  @Prop({ type: MongooseSchema.Types.BigInt, required: true })
+  base_price: bigint;
+
+  @Prop({ type: MongooseSchema.Types.BigInt, required: true })
+  sale_price: bigint;
+
+  @Prop({ type: String, default: 'VND', enum: ['VND'] })
   currency: string;
 }
+
+export const ProductPriceSummarySchema = SchemaFactory.createForClass(ProductPriceSummary);
 
 @Schema({
   collection: 'products',
@@ -65,7 +73,7 @@ export class Product {
   @Prop({
     type: String,
     default: null,
-    maxlength: 120,
+    maxlength: 100,
   })
   brand: string | null;
 
@@ -77,11 +85,8 @@ export class Product {
   })
   status: ProductStatus;
 
-  @Prop({
-    type: Object,
-    default: null,
-  })
-  price_summary: ProductPriceSummary | null;
+  @Prop({ type: ProductPriceSummarySchema, default: null })
+  price_summary?: ProductPriceSummary;
 
   @Prop({
     type: String,
@@ -152,6 +157,10 @@ ProductSchema.index(
   { shop_id: 1, slug: 1 },
   { unique: true, name: 'idx_products_shop_slug_unique' },
 );
+
+ProductSchema.index({ shop_id: 1, status: 1 }, { name: 'idx_products_shop_status' });
+
+ProductSchema.index({ status: 1 }, { name: 'idx_products_status' });
 
 ProductSchema.index(
   { shop_id: 1, status: 1, updated_at: -1 },
