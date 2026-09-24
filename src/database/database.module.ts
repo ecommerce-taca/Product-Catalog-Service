@@ -11,6 +11,8 @@ import {
 } from './schemas/attribute-definition.schema';
 import { Category, CategorySchema } from './schemas/category.schema';
 import { ProductCategory, ProductCategorySchema } from './schemas/product-category.schema';
+import { Sku, SkuSchema } from './schemas/sku.schema';
+import { Product, ProductSchema } from './schemas/product.schema';
 
 @Global()
 @Module({
@@ -35,6 +37,8 @@ import { ProductCategory, ProductCategorySchema } from './schemas/product-catego
       { name: Category.name, schema: CategorySchema },
       { name: ProductCategory.name, schema: ProductCategorySchema },
       { name: AttributeDefinition.name, schema: AttributeDefinitionSchema },
+      { name: Sku.name, schema: SkuSchema },
+      { name: Product.name, schema: ProductSchema },
     ]),
   ],
   providers: [TransactionRunner],
