@@ -1,0 +1,35 @@
+{
+  "version": "0.1",
+  "project": {
+    "name": "Product Catalog Service",
+    "baseUrl": "http://localhost:3000"
+  },
+  "default": {
+    "workspace": "main",
+    "collection": "product-catalog-api",
+    "environment": "local"
+  },
+  "workspaces": {
+    "main": {
+      "id": "c8a03d06-c889-48d8-86f1-656265bc0230",
+      "name": "Do ThanhTan's Workspace",
+      "type": "team"
+    }
+  },
+  "collections": {
+    "product-catalog-api": {
+      "id": "5dcdf919-18bb-4395-ba94-f6dcb6d0be6c",
+      "uid": "54684849-5dcdf919-18bb-4395-ba94-f6dcb6d0be6c",
+      "name": "Product Catalog Service API",
+      "workspace": "main"
+    }
+  },
+  "environments": {
+    "local": {
+      "id": "0b5653e7-c785-43cd-9a7d-5816889c4668",
+      "uid": "54684849-0b5653e7-c785-43cd-9a7d-5816889c4668",
+      "name": "Product Catalog - Local Dev",
+      "workspace": "main"
+    }
+  }
+}
