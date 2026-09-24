@@ -91,6 +91,22 @@ describe('ActorContextGuard', () => {
     expect(() => guard.canActivate(context)).toThrow(UnauthorizedException);
   });
 
+  it('should throw UnauthorizedException when route is not public and user is not authenticated (deny-by-default)', () => {
+    const context = createMockExecutionContext({}, false);
+
+    expect(() => guard.canActivate(context)).toThrow(UnauthorizedException);
+  });
+
+  it('should allow authenticated user on non-public route when no specific roles are required', () => {
+    const headers = {
+      'x-user-id': '01912f31-7a1b-7c12-9c55-8b1c34a6d921',
+    };
+    const context = createMockExecutionContext(headers, false);
+    const result = guard.canActivate(context);
+
+    expect(result).toBe(true);
+  });
+
   it('should throw ForbiddenException when user lacks required role', () => {
     const headers = {
       'x-user-id': 'buyer-uuid',

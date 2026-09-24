@@ -21,6 +21,21 @@ export function serializeBigInt(value: unknown): unknown {
     if (value instanceof Date) {
       return value;
     }
+    // Handle BSON Long from mongodb driver
+    if (
+      (value as { _bsontype?: string })._bsontype === 'Long' &&
+      typeof (value as { toNumber?: () => number }).toNumber === 'function'
+    ) {
+      return (value as { toNumber: () => number }).toNumber();
+    }
+    // Handle Map
+    if (value instanceof Map) {
+      const mapObj: Record<string, unknown> = {};
+      for (const [k, v] of value.entries()) {
+        mapObj[String(k)] = serializeBigInt(v);
+      }
+      return mapObj;
+    }
     // Handle Mongoose documents
     if (typeof (value as { toJSON?: () => unknown }).toJSON === 'function') {
       return serializeBigInt((value as { toJSON: () => unknown }).toJSON());
@@ -48,7 +63,7 @@ export class ResponseEnvelopeInterceptor implements NestInterceptor {
     ]);
 
     const request = context.switchToHttp().getRequest<Request>();
-    const isHealthRoute = request?.path?.includes('/health');
+    const isHealthRoute = Boolean(request?.path && /^\/health(\/.*)?$/.test(request.path));
 
     return next.handle().pipe(
       map((res) => {

@@ -65,7 +65,7 @@ describe('Health & Infrastructure E2E Tests', () => {
         },
         {
           provide: TransactionRunner,
-          useValue: { run: jest.fn() },
+          useValue: { execute: jest.fn() },
         },
       ],
       exports: [getConnectionToken(), TransactionRunner],

@@ -29,19 +29,20 @@ export class ActorContextGuard implements CanActivate {
       return true;
     }
 
+    // Zero-Trust Deny-by-Default: All non-public endpoints require an authenticated actor
+    if (!actor.isAuthenticated) {
+      throw new UnauthorizedException({
+        code: 'UNAUTHORIZED',
+        message: 'Yêu cầu xác thực tài khoản.',
+      });
+    }
+
     const requiredRoles = this.reflector.getAllAndOverride<string[]>(ROLES_KEY, [
       context.getHandler(),
       context.getClass(),
     ]);
 
     if (requiredRoles && requiredRoles.length > 0) {
-      if (!actor.isAuthenticated) {
-        throw new UnauthorizedException({
-          code: 'UNAUTHORIZED',
-          message: 'Yêu cầu xác thực tài khoản.',
-        });
-      }
-
       const hasRole =
         actor.roles.includes('SUPER_ADMIN') ||
         requiredRoles.some((role) => actor.roles.includes(role));
