@@ -5,6 +5,8 @@ import { DatabaseConfig } from '../config/database.config';
 import { TransactionRunner } from './transaction.runner';
 import { OutboxEvent, OutboxEventSchema } from './schemas/outbox-event.schema';
 import { CatalogAudit, CatalogAuditSchema } from './schemas/catalog-audit.schema';
+import { Category, CategorySchema } from './schemas/category.schema';
+import { ProductCategory, ProductCategorySchema } from './schemas/product-category.schema';
 
 @Global()
 @Module({
@@ -26,6 +28,8 @@ import { CatalogAudit, CatalogAuditSchema } from './schemas/catalog-audit.schema
     MongooseModule.forFeature([
       { name: OutboxEvent.name, schema: OutboxEventSchema },
       { name: CatalogAudit.name, schema: CatalogAuditSchema },
+      { name: Category.name, schema: CategorySchema },
+      { name: ProductCategory.name, schema: ProductCategorySchema },
     ]),
   ],
   providers: [TransactionRunner],
