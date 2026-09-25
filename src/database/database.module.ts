@@ -13,6 +13,7 @@ import { Category, CategorySchema } from './schemas/category.schema';
 import { ProductCategory, ProductCategorySchema } from './schemas/product-category.schema';
 import { Sku, SkuSchema } from './schemas/sku.schema';
 import { Product, ProductSchema } from './schemas/product.schema';
+import { ProductMedia, ProductMediaSchema } from './schemas/product-media.schema';
 
 @Global()
 @Module({
@@ -39,6 +40,7 @@ import { Product, ProductSchema } from './schemas/product.schema';
       { name: AttributeDefinition.name, schema: AttributeDefinitionSchema },
       { name: Sku.name, schema: SkuSchema },
       { name: Product.name, schema: ProductSchema },
+      { name: ProductMedia.name, schema: ProductMediaSchema },
     ]),
   ],
   providers: [TransactionRunner],
