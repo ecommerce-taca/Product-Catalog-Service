@@ -5,6 +5,7 @@ import {
   Inject,
   Injectable,
   NotFoundException,
+  forwardRef,
 } from '@nestjs/common';
 import { v7 as uuidv7 } from 'uuid';
 import { ProductRepositoryPort } from '../../product/repositories/product.repository.interface';
@@ -12,6 +13,11 @@ import { SkuRepositoryPort } from '../../sku/repositories/sku.repository.interfa
 import { ProductMediaRepositoryPort } from '../repositories/product-media.repository.interface';
 import { S3StorageService } from '../../integrations/storage/s3-storage.service';
 import { TransactionRunner } from '../../database/transaction.runner';
+import { OutboxRepositoryPort } from '../../outbox/repositories/outbox.repository.interface';
+import { CatalogAuditRepositoryPort } from '../../audit/repositories/audit.repository.interface';
+import { AggregateType } from '../../database/schemas/outbox-event.schema';
+import { AuditTargetType } from '../../database/schemas/catalog-audit.schema';
+import { TraceContextStorage } from '../../common/context/trace-context.storage';
 import {
   MediaScope,
   MediaStatus,
@@ -25,6 +31,8 @@ import {
   ProductMediaItemDto,
   UploadUrlResponseDto,
 } from '../dtos/media-response.dto';
+
+const SYSTEM_ACTOR_ID = '01910000-0000-7000-8000-000000000000';
 
 const IMAGE_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
 const VIDEO_TYPES = new Set(['video/mp4']);
@@ -40,14 +48,16 @@ const SHA256_REGEX = /^[0-9a-fA-F]{64}$/;
 @Injectable()
 export class MediaService {
   constructor(
-    @Inject('ProductRepositoryPort')
+    @Inject(forwardRef(() => 'ProductRepositoryPort'))
     private readonly productRepository: ProductRepositoryPort,
-    @Inject('SkuRepositoryPort')
+    @Inject(forwardRef(() => 'SkuRepositoryPort'))
     private readonly skuRepository: SkuRepositoryPort,
     @Inject('ProductMediaRepositoryPort')
     private readonly mediaRepository: ProductMediaRepositoryPort,
     private readonly storageService: S3StorageService,
     private readonly transactionRunner: TransactionRunner,
+    private readonly outboxRepository: OutboxRepositoryPort,
+    private readonly auditRepository: CatalogAuditRepositoryPort,
   ) {}
 
   /**
@@ -62,8 +72,8 @@ export class MediaService {
   ): Promise<UploadUrlResponseDto> {
     if (!shopId) {
       throw new ForbiddenException({
-        code: 'FORBIDDEN',
-        message: 'FORBIDDEN',
+        code: 'PRODUCT_FORBIDDEN',
+        message: 'Bạn không có quyền thao tác trên sản phẩm của shop khác.',
       });
     }
 
@@ -77,8 +87,8 @@ export class MediaService {
     }
     if (product.shop_id !== shopId) {
       throw new ForbiddenException({
-        code: 'FORBIDDEN',
-        message: 'FORBIDDEN',
+        code: 'PRODUCT_FORBIDDEN',
+        message: 'Bạn không có quyền thao tác trên sản phẩm của shop khác.',
       });
     }
 
@@ -89,7 +99,7 @@ export class MediaService {
       });
     }
     if (product.status === ProductStatus.BLOCKED) {
-      throw new ConflictException({
+      throw new ForbiddenException({
         code: 'PRODUCT_BLOCKED',
         message: 'Không thể thao tác media trên sản phẩm đã bị khóa.',
       });
@@ -215,8 +225,8 @@ export class MediaService {
   ): Promise<CompleteUploadResponseDto> {
     if (!shopId) {
       throw new ForbiddenException({
-        code: 'FORBIDDEN',
-        message: 'FORBIDDEN',
+        code: 'PRODUCT_FORBIDDEN',
+        message: 'Bạn không có quyền thao tác trên sản phẩm của shop khác.',
       });
     }
 
@@ -230,8 +240,8 @@ export class MediaService {
     }
     if (product.shop_id !== shopId) {
       throw new ForbiddenException({
-        code: 'FORBIDDEN',
-        message: 'FORBIDDEN',
+        code: 'PRODUCT_FORBIDDEN',
+        message: 'Bạn không có quyền thao tác trên sản phẩm của shop khác.',
       });
     }
 
@@ -242,7 +252,7 @@ export class MediaService {
       });
     }
     if (product.status === ProductStatus.BLOCKED) {
-      throw new ConflictException({
+      throw new ForbiddenException({
         code: 'PRODUCT_BLOCKED',
         message: 'Không thể thao tác media trên sản phẩm đã bị khóa.',
       });
@@ -252,8 +262,8 @@ export class MediaService {
     const media = await this.mediaRepository.findByProductIdAndMediaId(productId, dto.media_id);
     if (!media) {
       throw new NotFoundException({
-        code: 'PRODUCT_MEDIA_NOT_FOUND',
-        message: 'PRODUCT_MEDIA_NOT_FOUND',
+        code: 'PRODUCT_NOT_FOUND',
+        message: 'Không tìm thấy tệp media.',
       });
     }
 
@@ -288,7 +298,9 @@ export class MediaService {
       });
     }
 
-    // 5. Atomic transaction: if cover is true, unset other covers and mark READY
+    const publicUrl = this.storageService.getPublicUrl(media.object_key);
+
+    // 5. Atomic transaction: if cover is true, unset other covers and mark READY, record outbox & audit
     await this.transactionRunner.execute(async (session) => {
       if (media.is_cover) {
         await this.mediaRepository.unsetOtherCovers(productId, media._id, session);
@@ -300,9 +312,66 @@ export class MediaService {
         undefined,
         session,
       );
-    });
 
-    const publicUrl = this.storageService.getPublicUrl(media.object_key);
+      // Record outbox event (SF-4)
+      await this.outboxRepository.saveEvent(
+        {
+          _id: uuidv7(),
+          event_id: uuidv7(),
+          aggregate_type: AggregateType.PRODUCT,
+          aggregate_id: productId,
+          event_type: 'product.media_uploaded',
+          schema_version: 1,
+          payload: {
+            product_id: productId,
+            shop_id: shopId,
+            media_id: media._id,
+            object_key: media.object_key,
+            content_type: media.content_type,
+            size_bytes: media.size_bytes,
+            sha256: media.sha256,
+            is_cover: media.is_cover,
+            scope: media.scope,
+            sku_id: media.sku_id,
+            status: MediaStatus.READY,
+            url: publicUrl,
+          },
+          occurred_at: new Date(),
+          topic: 'product.events.v1',
+          version: BigInt(product.version ?? 1),
+          actor_user_id: _actorUserId || null,
+          traceparent: TraceContextStorage.getTraceparent() || null,
+        },
+        session,
+      );
+
+      // Record audit log (SF-4)
+      await this.auditRepository.create(
+        {
+          _id: uuidv7(),
+          actor_user_id: _actorUserId || SYSTEM_ACTOR_ID,
+          shop_id: shopId,
+          action: 'MEDIA_UPLOADED',
+          target_type: AuditTargetType.MEDIA,
+          target_id: media._id,
+          entity_type: 'MEDIA',
+          entity_id: media._id,
+          metadata: {
+            product_id: productId,
+            media_id: media._id,
+            is_cover: media.is_cover,
+            object_key: media.object_key,
+          },
+          changes: {
+            status: MediaStatus.READY,
+            media_id: media._id,
+            object_key: media.object_key,
+          },
+          occurred_at: new Date(),
+        },
+        session,
+      );
+    });
 
     return {
       media_id: media._id,
@@ -317,8 +386,8 @@ export class MediaService {
   async listMedia(shopId: string, productId: string): Promise<ProductMediaItemDto[]> {
     if (!shopId) {
       throw new ForbiddenException({
-        code: 'FORBIDDEN',
-        message: 'FORBIDDEN',
+        code: 'PRODUCT_FORBIDDEN',
+        message: 'Bạn không có quyền thao tác trên sản phẩm của shop khác.',
       });
     }
 
@@ -331,8 +400,8 @@ export class MediaService {
     }
     if (product.shop_id !== shopId) {
       throw new ForbiddenException({
-        code: 'FORBIDDEN',
-        message: 'FORBIDDEN',
+        code: 'PRODUCT_FORBIDDEN',
+        message: 'Bạn không có quyền thao tác trên sản phẩm của shop khác.',
       });
     }
 
@@ -342,16 +411,18 @@ export class MediaService {
 
   /**
    * Soft-delete media by setting status to DELETED and unsetting cover.
+   * Records transactional Outbox event and Audit log.
    */
   async deleteMedia(
     shopId: string,
     productId: string,
     mediaId: string,
+    actorUserId?: string,
   ): Promise<{ success: boolean }> {
     if (!shopId) {
       throw new ForbiddenException({
-        code: 'FORBIDDEN',
-        message: 'FORBIDDEN',
+        code: 'PRODUCT_FORBIDDEN',
+        message: 'Bạn không có quyền thao tác trên sản phẩm của shop khác.',
       });
     }
 
@@ -364,8 +435,8 @@ export class MediaService {
     }
     if (product.shop_id !== shopId) {
       throw new ForbiddenException({
-        code: 'FORBIDDEN',
-        message: 'FORBIDDEN',
+        code: 'PRODUCT_FORBIDDEN',
+        message: 'Bạn không có quyền thao tác trên sản phẩm của shop khác.',
       });
     }
 
@@ -376,7 +447,7 @@ export class MediaService {
       });
     }
     if (product.status === ProductStatus.BLOCKED) {
-      throw new ConflictException({
+      throw new ForbiddenException({
         code: 'PRODUCT_BLOCKED',
         message: 'Không thể thao tác media trên sản phẩm đã bị khóa.',
       });
@@ -385,13 +456,68 @@ export class MediaService {
     const media = await this.mediaRepository.findByProductIdAndMediaId(productId, mediaId);
     if (!media) {
       throw new NotFoundException({
-        code: 'PRODUCT_MEDIA_NOT_FOUND',
-        message: 'PRODUCT_MEDIA_NOT_FOUND',
+        code: 'PRODUCT_NOT_FOUND',
+        message: 'Không tìm thấy tệp media.',
       });
     }
 
-    await this.mediaRepository.updateStatus(mediaId, productId, MediaStatus.DELETED, {
-      is_cover: false,
+    await this.transactionRunner.execute(async (session) => {
+      await this.mediaRepository.updateStatus(
+        mediaId,
+        productId,
+        MediaStatus.DELETED,
+        {
+          is_cover: false,
+        },
+        session,
+      );
+
+      // Record outbox event (SF-4)
+      await this.outboxRepository.saveEvent(
+        {
+          _id: uuidv7(),
+          event_id: uuidv7(),
+          aggregate_type: AggregateType.PRODUCT,
+          aggregate_id: productId,
+          event_type: 'product.media_deleted',
+          schema_version: 1,
+          payload: {
+            product_id: productId,
+            shop_id: shopId,
+            media_id: mediaId,
+          },
+          occurred_at: new Date(),
+          topic: 'product.events.v1',
+          version: BigInt(product.version ?? 1),
+          actor_user_id: actorUserId || null,
+          traceparent: TraceContextStorage.getTraceparent() || null,
+        },
+        session,
+      );
+
+      // Record audit log (SF-4)
+      await this.auditRepository.create(
+        {
+          _id: uuidv7(),
+          actor_user_id: actorUserId || SYSTEM_ACTOR_ID,
+          shop_id: shopId,
+          action: 'MEDIA_DELETED',
+          target_type: AuditTargetType.MEDIA,
+          target_id: mediaId,
+          entity_type: 'MEDIA',
+          entity_id: mediaId,
+          metadata: {
+            product_id: productId,
+            media_id: mediaId,
+          },
+          changes: {
+            status: MediaStatus.DELETED,
+            is_cover: false,
+          },
+          occurred_at: new Date(),
+        },
+        session,
+      );
     });
 
     return { success: true };

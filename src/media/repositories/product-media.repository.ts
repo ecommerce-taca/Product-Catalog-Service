@@ -37,6 +37,13 @@ export class ProductMediaRepository
     return query.exec();
   }
 
+  async findActiveByProductId(
+    productId: string,
+    session?: ClientSession,
+  ): Promise<ProductMediaDocument[]> {
+    return this.findByProductId(productId, session);
+  }
+
   async findByProductIdAndMediaId(
     productId: string,
     mediaId: string,

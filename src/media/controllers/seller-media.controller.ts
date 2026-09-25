@@ -59,6 +59,6 @@ export class SellerMediaController {
     @ShopScope() shopScope: string,
   ): Promise<{ success: boolean }> {
     const actorShopScope = shopScope || actor?.shopScope || '';
-    return this.mediaService.deleteMedia(actorShopScope, productId, mediaId);
+    return this.mediaService.deleteMedia(actorShopScope, productId, mediaId, actor?.userId || '');
   }
 }

@@ -20,9 +20,16 @@ import { SkuDocument, SkuStatus } from '../../database/schemas/sku.schema';
 import { AttributeDefinitionRepositoryPort } from '../../attribute/repositories/attribute-definition.repository.interface';
 import { SkuRepositoryPort } from '../repositories/sku.repository.interface';
 import { ProductRepositoryPort } from '../../product/repositories/product.repository.interface';
+import { OutboxRepositoryPort } from '../../outbox/repositories/outbox.repository.interface';
+import { CatalogAuditRepositoryPort } from '../../audit/repositories/audit.repository.interface';
+import { AggregateType } from '../../database/schemas/outbox-event.schema';
+import { AuditTargetType } from '../../database/schemas/catalog-audit.schema';
+import { TraceContextStorage } from '../../common/context/trace-context.storage';
 import { VariantResolver } from './variant-resolver.service';
 import { UpdateProductSkusDto } from '../dto/update-product-skus.dto';
 import { SkuResponseDto } from '../dto/sku-response.dto';
+
+const SYSTEM_ACTOR_ID = '01910000-0000-7000-8000-000000000000';
 
 @Injectable()
 export class SkuService {
@@ -35,6 +42,8 @@ export class SkuService {
     private readonly skuRepository: SkuRepositoryPort,
     private readonly variantResolver: VariantResolver,
     private readonly transactionRunner: TransactionRunner,
+    private readonly outboxRepository: OutboxRepositoryPort,
+    private readonly auditRepository: CatalogAuditRepositoryPort,
   ) {}
 
   /**
@@ -46,6 +55,7 @@ export class SkuService {
     productId: string,
     actorShopId: string,
     dto: UpdateProductSkusDto,
+    actorUserId?: string,
   ): Promise<SkuResponseDto[]> {
     return this.transactionRunner.execute(async (session) => {
       // 1. Load product inside transaction
@@ -294,7 +304,69 @@ export class SkuService {
         });
       }
 
-      // 12. Build and return SkuResponseDto[]
+      // 12. Record transactional outbox event (SF-4)
+      await this.outboxRepository.saveEvent(
+        {
+          _id: uuidv7(),
+          event_id: uuidv7(),
+          aggregate_type: AggregateType.PRODUCT,
+          aggregate_id: productId,
+          event_type: 'product.skus_updated',
+          schema_version: 1,
+          payload: {
+            product_id: productId,
+            shop_id: actorShopId,
+            version: updatedProduct.version,
+            skus: processedSkus,
+          },
+          occurred_at: new Date(),
+          topic: 'product.events.v1',
+          version: BigInt(updatedProduct.version),
+          actor_user_id: actorUserId || null,
+          traceparent: TraceContextStorage.getTraceparent() || null,
+        },
+        session,
+      );
+
+      // Record audit log (SF-4)
+      await this.auditRepository.create(
+        {
+          _id: uuidv7(),
+          actor_user_id: actorUserId || SYSTEM_ACTOR_ID,
+          shop_id: actorShopId,
+          action: 'SKU_CONFIGURED',
+          target_type: AuditTargetType.SKU,
+          target_id: productId,
+          entity_type: 'SKU',
+          entity_id: productId,
+          metadata: {
+            sku_count: processedSkus.length,
+            attribute_definitions_count: defs.length,
+            skus: processedSkus.map((s) => ({
+              sku_id: s.sku_id,
+              seller_sku: s.seller_sku,
+              variant_key: s.variant_key,
+              price_override: s.price_override,
+              status: s.status,
+            })),
+          },
+          changes: {
+            sku_count: processedSkus.length,
+            attribute_definitions_count: defs.length,
+            skus: processedSkus.map((s) => ({
+              sku_id: s.sku_id,
+              seller_sku: s.seller_sku,
+              variant_key: s.variant_key,
+              price_override: s.price_override,
+              status: s.status,
+            })),
+          },
+          occurred_at: new Date(),
+        },
+        session,
+      );
+
+      // 13. Build and return SkuResponseDto[]
       const resolvedBase = Number(newPriceSummary?.base_price ?? 0);
       const resolvedSale = Number(newPriceSummary?.sale_price ?? resolvedBase);
 

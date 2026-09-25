@@ -167,7 +167,7 @@ describe('SellerMediaController', () => {
       const result = await controller.deleteMedia(productId, mediaId, mockActor, shopId);
 
       expect(result).toEqual({ success: true });
-      expect(mockMediaService.deleteMedia).toHaveBeenCalledWith(shopId, productId, mediaId);
+      expect(mockMediaService.deleteMedia).toHaveBeenCalledWith(shopId, productId, mediaId, userId);
     });
   });
 });

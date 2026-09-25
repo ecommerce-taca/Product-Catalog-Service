@@ -8,6 +8,10 @@ import {
 
 export interface ProductMediaRepositoryPort extends BaseRepository<ProductMediaDocument> {
   findByProductId(productId: string, session?: ClientSession): Promise<ProductMediaDocument[]>;
+  findActiveByProductId(
+    productId: string,
+    session?: ClientSession,
+  ): Promise<ProductMediaDocument[]>;
   findByProductIdAndMediaId(
     productId: string,
     mediaId: string,

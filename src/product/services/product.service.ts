@@ -5,6 +5,8 @@ import {
   Inject,
   Injectable,
   NotFoundException,
+  forwardRef,
+  Optional,
 } from '@nestjs/common';
 import sanitizeHtml from 'sanitize-html';
 import { v7 as uuidv7 } from 'uuid';
@@ -20,6 +22,8 @@ import { CategoryRepositoryPort } from '../../category/repositories/category.rep
 import { AttributeDefinitionRepositoryPort } from '../../attribute/repositories/attribute-definition.repository.interface';
 import { SkuRepositoryPort } from '../../sku/repositories/sku.repository.interface';
 import { OutboxRepositoryPort } from '../../outbox/repositories/outbox.repository.interface';
+import { ProductMediaRepositoryPort } from '../../media/repositories/product-media.repository.interface';
+import { S3StorageService } from '../../integrations/storage/s3-storage.service';
 import { CreateProductDto } from '../dto/create-product.dto';
 import { UpdateProductDto } from '../dto/update-product.dto';
 import { QueryProductDto } from '../dto/query-product.dto';
@@ -57,6 +61,10 @@ export class ProductService {
     private readonly skuRepository: SkuRepositoryPort,
     private readonly outboxRepository: OutboxRepositoryPort,
     private readonly transactionRunner: TransactionRunner,
+    @Inject(forwardRef(() => 'ProductMediaRepositoryPort'))
+    private readonly mediaRepository: ProductMediaRepositoryPort,
+    @Optional()
+    private readonly storageService?: S3StorageService,
   ) {}
 
   /**
@@ -236,10 +244,13 @@ export class ProductService {
       });
     }
 
-    const [definitions, skus, categoryAssignments] = await Promise.all([
+    const [definitions, skus, categoryAssignments, mediaItems] = await Promise.all([
       this.attributeDefinitionRepository.findByScope(AttributeScopeType.PRODUCT, productId),
       this.skuRepository.findByProductId(productId),
       this.productCategoryRepository.findByProductId(productId),
+      this.mediaRepository.findActiveByProductId
+        ? this.mediaRepository.findActiveByProductId(productId)
+        : this.mediaRepository.findByProductId(productId),
     ]);
 
     const primaryAssignment = categoryAssignments.find((a) => a.is_primary);
@@ -289,7 +300,15 @@ export class ProductService {
         primary_category_id: primaryAssignment?.category_id || product.primary_category_id || null,
         secondary_category_ids: secondaryAssignments,
       },
-      media: [],
+      media: (mediaItems || []).map((m) => ({
+        media_id: m._id,
+        url:
+          this.storageService?.getPublicUrl(m.object_key) ??
+          (m as unknown as { url?: string }).url ??
+          m.object_key,
+        status: m.status,
+        is_cover: Boolean(m.is_cover),
+      })),
       shop_projection: shopProjection,
       block_reason: product.status === ProductStatus.BLOCKED ? product.block_reason : null,
     };

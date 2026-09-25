@@ -14,6 +14,9 @@ export enum AuditAction {
   UNBLOCK = 'UNBLOCK',
   CATEGORY_CHANGE = 'CATEGORY_CHANGE',
   MEDIA_CHANGE = 'MEDIA_CHANGE',
+  SKU_CONFIGURED = 'SKU_CONFIGURED',
+  MEDIA_UPLOADED = 'MEDIA_UPLOADED',
+  MEDIA_DELETED = 'MEDIA_DELETED',
 }
 
 export enum AuditTargetType {
@@ -69,6 +72,24 @@ export class CatalogAudit {
     required: true,
   })
   target_id: string;
+
+  @Prop({
+    type: String,
+    default: null,
+  })
+  entity_type?: string | null;
+
+  @Prop({
+    type: String,
+    default: null,
+  })
+  entity_id?: string | null;
+
+  @Prop({
+    type: MongooseSchema.Types.Mixed,
+    default: null,
+  })
+  changes?: Record<string, unknown> | unknown;
 
   @Prop({
     type: String,

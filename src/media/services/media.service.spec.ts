@@ -11,6 +11,8 @@ import { SkuRepositoryPort } from '../../sku/repositories/sku.repository.interfa
 import { ProductMediaRepositoryPort } from '../repositories/product-media.repository.interface';
 import { S3StorageService } from '../../integrations/storage/s3-storage.service';
 import { TransactionRunner } from '../../database/transaction.runner';
+import { OutboxRepositoryPort } from '../../outbox/repositories/outbox.repository.interface';
+import { CatalogAuditRepositoryPort } from '../../audit/repositories/audit.repository.interface';
 import { ClientSession } from 'mongoose';
 import { ProductDocument, ProductStatus } from '../../database/schemas/product.schema';
 import { SkuDocument } from '../../database/schemas/sku.schema';
@@ -33,6 +35,8 @@ describe('MediaService', () => {
   let mockMediaRepo: MockType<ProductMediaRepositoryPort>;
   let mockStorageService: MockType<S3StorageService>;
   let mockTransactionRunner: MockType<TransactionRunner>;
+  let mockOutboxRepo: MockType<OutboxRepositoryPort>;
+  let mockAuditRepo: MockType<CatalogAuditRepositoryPort>;
 
   const shopId = '01912f20-7a1b-7c12-9c55-8b1c34a6d920';
   const otherShopId = '01912f20-7a1b-7c12-9c55-8b1c34a6d999';
@@ -94,6 +98,16 @@ describe('MediaService', () => {
         ),
     };
 
+    mockOutboxRepo = {
+      saveEvent: jest.fn().mockResolvedValue({}),
+      create: jest.fn().mockResolvedValue({}),
+    };
+
+    mockAuditRepo = {
+      create: jest.fn().mockResolvedValue({}),
+      record: jest.fn().mockResolvedValue({}),
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         MediaService,
@@ -102,6 +116,8 @@ describe('MediaService', () => {
         { provide: 'ProductMediaRepositoryPort', useValue: mockMediaRepo },
         { provide: S3StorageService, useValue: mockStorageService },
         { provide: TransactionRunner, useValue: mockTransactionRunner },
+        { provide: OutboxRepositoryPort, useValue: mockOutboxRepo },
+        { provide: CatalogAuditRepositoryPort, useValue: mockAuditRepo },
       ],
     }).compile();
 
@@ -261,7 +277,7 @@ describe('MediaService', () => {
       ).rejects.toThrow(ConflictException);
     });
 
-    it('should reject requestUploadUrl when product is BLOCKED (409 Conflict)', async () => {
+    it('should reject requestUploadUrl when product is BLOCKED (403 Forbidden)', async () => {
       mockProductRepo.findById!.mockResolvedValueOnce({
         ...mockProduct,
         status: ProductStatus.BLOCKED,
@@ -269,7 +285,7 @@ describe('MediaService', () => {
 
       await expect(
         service.requestUploadUrl(shopId, productId, actorUserId, validImageDto),
-      ).rejects.toThrow(ConflictException);
+      ).rejects.toThrow(ForbiddenException);
     });
   });
 
@@ -318,6 +334,22 @@ describe('MediaService', () => {
         productId,
         MediaStatus.READY,
         undefined,
+        expect.anything(),
+      );
+      expect(mockOutboxRepo.saveEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event_type: 'product.media_uploaded',
+          aggregate_type: 'PRODUCT',
+          aggregate_id: productId,
+        }),
+        expect.anything(),
+      );
+      expect(mockAuditRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'MEDIA_UPLOADED',
+          entity_type: 'MEDIA',
+          entity_id: mediaId,
+        }),
         expect.anything(),
       );
     });
@@ -372,7 +404,7 @@ describe('MediaService', () => {
       ).rejects.toThrow(ConflictException);
     });
 
-    it('should reject completeUpload when product is BLOCKED (409 Conflict)', async () => {
+    it('should reject completeUpload when product is BLOCKED (403 Forbidden)', async () => {
       mockProductRepo.findById!.mockResolvedValueOnce({
         ...mockProduct,
         status: ProductStatus.BLOCKED,
@@ -380,7 +412,7 @@ describe('MediaService', () => {
 
       await expect(
         service.completeUpload(shopId, productId, actorUserId, completeDto),
-      ).rejects.toThrow(ConflictException);
+      ).rejects.toThrow(ForbiddenException);
     });
   });
 
@@ -415,13 +447,13 @@ describe('MediaService', () => {
   });
 
   describe('deleteMedia', () => {
-    it('should mark media as DELETED and unset cover', async () => {
+    it('should mark media as DELETED, unset cover, and record outbox & audit', async () => {
       mockMediaRepo.findByProductIdAndMediaId!.mockResolvedValueOnce({
         _id: 'media-1',
         product_id: productId,
       } as unknown as ProductMediaDocument);
 
-      const result = await service.deleteMedia(shopId, productId, 'media-1');
+      const result = await service.deleteMedia(shopId, productId, 'media-1', actorUserId);
 
       expect(result).toEqual({ success: true });
       expect(mockMediaRepo.updateStatus).toHaveBeenCalledWith(
@@ -429,6 +461,23 @@ describe('MediaService', () => {
         productId,
         MediaStatus.DELETED,
         { is_cover: false },
+        expect.anything(),
+      );
+      expect(mockOutboxRepo.saveEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event_type: 'product.media_deleted',
+          aggregate_type: 'PRODUCT',
+          aggregate_id: productId,
+        }),
+        expect.anything(),
+      );
+      expect(mockAuditRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'MEDIA_DELETED',
+          entity_type: 'MEDIA',
+          entity_id: 'media-1',
+        }),
+        expect.anything(),
       );
     });
 
@@ -451,14 +500,14 @@ describe('MediaService', () => {
       );
     });
 
-    it('should reject deleteMedia when product is BLOCKED (409 Conflict)', async () => {
+    it('should reject deleteMedia when product is BLOCKED (403 Forbidden)', async () => {
       mockProductRepo.findById!.mockResolvedValueOnce({
         ...mockProduct,
         status: ProductStatus.BLOCKED,
       } as ProductDocument);
 
       await expect(service.deleteMedia(shopId, productId, 'media-1')).rejects.toThrow(
-        ConflictException,
+        ForbiddenException,
       );
     });
   });
