@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, forwardRef } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { Product, ProductSchema } from '../database/schemas/product.schema';
 import { CategoryModule } from '../category/category.module';
@@ -14,7 +14,7 @@ import { SellerProductController } from './controllers/seller-product.controller
   imports: [
     MongooseModule.forFeature([{ name: Product.name, schema: ProductSchema }]),
     CategoryModule,
-    SkuModule,
+    forwardRef(() => SkuModule),
     AttributeModule,
     OutboxModule,
     DatabaseModule,

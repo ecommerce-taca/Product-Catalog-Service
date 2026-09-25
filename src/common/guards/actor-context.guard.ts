@@ -67,10 +67,10 @@ export class ActorContextGuard implements CanActivate {
         (actor.permissions.length > 0 &&
           requiredPermissions.every((perm) => actor.permissions.includes(perm)));
 
-      if (!hasPermission && actor.permissions.length > 0) {
+      if (!hasPermission) {
         throw new ForbiddenException({
           code: 'PRODUCT_FORBIDDEN',
-          message: 'Bạn không có quyền thực hiện thao tác này.',
+          message: 'Insufficient permissions',
         });
       }
     }

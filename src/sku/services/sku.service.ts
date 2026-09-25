@@ -5,12 +5,11 @@ import {
   Inject,
   Injectable,
   NotFoundException,
+  forwardRef,
 } from '@nestjs/common';
-import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
 import { v7 as uuidv7 } from 'uuid';
 import { TransactionRunner } from '../../database/transaction.runner';
-import { Product, ProductDocument, ProductStatus } from '../../database/schemas/product.schema';
+import { ProductStatus } from '../../database/schemas/product.schema';
 import {
   AttributeDefinitionDocument,
   AttributeDefinitionStatus,
@@ -20,6 +19,7 @@ import {
 import { SkuDocument, SkuStatus } from '../../database/schemas/sku.schema';
 import { AttributeDefinitionRepositoryPort } from '../../attribute/repositories/attribute-definition.repository.interface';
 import { SkuRepositoryPort } from '../repositories/sku.repository.interface';
+import { ProductRepositoryPort } from '../../product/repositories/product.repository.interface';
 import { VariantResolver } from './variant-resolver.service';
 import { UpdateProductSkusDto } from '../dto/update-product-skus.dto';
 import { SkuResponseDto } from '../dto/sku-response.dto';
@@ -27,8 +27,8 @@ import { SkuResponseDto } from '../dto/sku-response.dto';
 @Injectable()
 export class SkuService {
   constructor(
-    @InjectModel(Product.name)
-    private readonly productModel: Model<ProductDocument>,
+    @Inject(forwardRef(() => 'ProductRepositoryPort'))
+    private readonly productRepository: ProductRepositoryPort,
     @Inject('AttributeDefinitionRepositoryPort')
     private readonly attributeDefinitionRepository: AttributeDefinitionRepositoryPort,
     @Inject('SkuRepositoryPort')
@@ -49,7 +49,7 @@ export class SkuService {
   ): Promise<SkuResponseDto[]> {
     return this.transactionRunner.execute(async (session) => {
       // 1. Load product inside transaction
-      const product = await this.productModel.findById(productId).session(session);
+      const product = await this.productRepository.findById(productId, session);
       if (!product) {
         throw new NotFoundException({
           code: 'PRODUCT_NOT_FOUND',
@@ -259,11 +259,12 @@ export class SkuService {
         await this.skuRepository.bulkUpsert(skuUpserts as Partial<SkuDocument>[], session);
       }
 
-      // 11. Recompute product price_summary & increment product version
+      // 11. Recompute product price_summary & atomic CAS update
       const currentBasePrice = Number(product.price_summary?.base_price ?? 0);
       const currentSalePrice = Number(product.price_summary?.sale_price ?? currentBasePrice);
 
       const activeSkus = processedSkus.filter((s) => s.status === SkuStatus.ACTIVE);
+      let newPriceSummary = product.price_summary;
       if (activeSkus.length > 0) {
         const salePrices = activeSkus.map((s) =>
           s.price_override !== null && s.price_override !== undefined
@@ -272,19 +273,30 @@ export class SkuService {
         );
         const minSalePrice = Math.min(...salePrices);
 
-        product.price_summary = {
+        newPriceSummary = {
           base_price: BigInt(currentBasePrice),
           sale_price: BigInt(minSalePrice),
           currency: 'VND',
         };
       }
 
-      product.version = BigInt(product.version || 1) + BigInt(1);
-      await product.save({ session });
+      const updatedProduct = await this.productRepository.atomicCasUpdate(
+        productId,
+        actorShopId,
+        product.version,
+        { price_summary: newPriceSummary },
+        session,
+      );
+      if (!updatedProduct) {
+        throw new ConflictException({
+          code: 'PRODUCT_VERSION_CONFLICT',
+          message: 'Sản phẩm đã được cập nhật bởi thao tác khác. Vui lòng tải lại.',
+        });
+      }
 
       // 12. Build and return SkuResponseDto[]
-      const resolvedBase = Number(product.price_summary?.base_price ?? 0);
-      const resolvedSale = Number(product.price_summary?.sale_price ?? resolvedBase);
+      const resolvedBase = Number(newPriceSummary?.base_price ?? 0);
+      const resolvedSale = Number(newPriceSummary?.sale_price ?? resolvedBase);
 
       return processedSkus.map((s) => {
         const itemSalePrice =
@@ -318,7 +330,7 @@ export class SkuService {
    * If actorShopId is provided, validates that the product belongs to that shop (Zero-Trust IDOR).
    */
   async getSkusByProductId(productId: string, actorShopId?: string): Promise<SkuResponseDto[]> {
-    const product = await this.productModel.findById(productId);
+    const product = await this.productRepository.findById(productId);
     if (!product) {
       throw new NotFoundException({
         code: 'PRODUCT_NOT_FOUND',
