@@ -10,6 +10,7 @@ import { Request } from 'express';
 import { ActorContext } from '../context/actor-context.interface';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
 import { ROLES_KEY } from '../decorators/roles.decorator';
+import { PERMISSIONS_KEY } from '../decorators/permissions.decorator';
 
 @Injectable()
 export class ActorContextGuard implements CanActivate {
@@ -48,6 +49,25 @@ export class ActorContextGuard implements CanActivate {
         requiredRoles.some((role) => actor.roles.includes(role));
 
       if (!hasRole) {
+        throw new ForbiddenException({
+          code: 'PRODUCT_FORBIDDEN',
+          message: 'Bạn không có quyền thực hiện thao tác này.',
+        });
+      }
+    }
+
+    const requiredPermissions = this.reflector.getAllAndOverride<string[]>(PERMISSIONS_KEY, [
+      context.getHandler(),
+      context.getClass(),
+    ]);
+
+    if (requiredPermissions && requiredPermissions.length > 0) {
+      const hasPermission =
+        actor.roles.includes('SUPER_ADMIN') ||
+        (actor.permissions.length > 0 &&
+          requiredPermissions.every((perm) => actor.permissions.includes(perm)));
+
+      if (!hasPermission && actor.permissions.length > 0) {
         throw new ForbiddenException({
           code: 'PRODUCT_FORBIDDEN',
           message: 'Bạn không có quyền thực hiện thao tác này.',
