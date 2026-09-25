@@ -109,6 +109,33 @@ describe('SellerMediaController', () => {
         dto,
       );
     });
+
+    it('should forward request to mediaService when actor has SELLER_STAFF role', async () => {
+      const staffActor: ActorContext = {
+        userId,
+        roles: ['SELLER_STAFF'],
+        permissions: ['catalog:product:write'],
+        shopScope: shopId,
+        isAuthenticated: true,
+      };
+      const dto: UploadUrlDto = {
+        content_type: 'image/webp',
+        size_bytes: 1024,
+        sha256: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
+        scope: MediaScope.SPU,
+      };
+
+      const result = await controller.requestUploadUrl(productId, staffActor, shopId, dto);
+
+      expect(result).toBeDefined();
+      expect(result.media_id).toBe(mediaId);
+      expect(mockMediaService.requestUploadUrl).toHaveBeenCalledWith(
+        shopId,
+        productId,
+        userId,
+        dto,
+      );
+    });
   });
 
   describe('completeUpload', () => {

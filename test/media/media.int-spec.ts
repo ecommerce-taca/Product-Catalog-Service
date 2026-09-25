@@ -16,7 +16,7 @@ import {
   ProductMedia,
   ProductMediaDocument,
 } from '../../src/database/schemas/product-media.schema';
-import { ProductDocument } from '../../src/database/schemas/product.schema';
+import { ProductDocument, ProductStatus } from '../../src/database/schemas/product.schema';
 import { SkuDocument } from '../../src/database/schemas/sku.schema';
 import { ProductMediaRepositoryPort } from '../../src/media/repositories/product-media.repository.interface';
 import { ProductRepositoryPort } from '../../src/product/repositories/product.repository.interface';
@@ -623,6 +623,69 @@ describe('MediaModule Integration Tests [PCAT-B05]', () => {
       expect(res.status).toBe(HttpStatus.NOT_FOUND);
       expect(res.body.error.code).toBe('PRODUCT_NOT_FOUND');
     });
+
+    it('1.18 should reject video when is_cover is true (400 PRODUCT_MEDIA_INVALID)', async () => {
+      const payload = {
+        content_type: 'video/mp4',
+        size_bytes: 10 * 1024 * 1024,
+        sha256: validSha256,
+        is_cover: true,
+      };
+
+      const res = await request(app.getHttpServer())
+        .post(`/seller/products/${productId}/media/upload-url`)
+        .set(defaultHeaders)
+        .send(payload);
+
+      expect(res.status).toBe(HttpStatus.BAD_REQUEST);
+      expect(res.body.error.code).toBe('PRODUCT_MEDIA_INVALID');
+    });
+
+    it('1.19 should reject upload-url when product is ARCHIVED (409 PRODUCT_ARCHIVED)', async () => {
+      inMemoryProductRepo.set({
+        _id: productId,
+        shop_id: shopId,
+        title: 'Archived SPU',
+        status: ProductStatus.ARCHIVED,
+      } as unknown as ProductDocument);
+
+      const payload = {
+        content_type: 'image/jpeg',
+        size_bytes: 1024,
+        sha256: validSha256,
+      };
+
+      const res = await request(app.getHttpServer())
+        .post(`/seller/products/${productId}/media/upload-url`)
+        .set(defaultHeaders)
+        .send(payload);
+
+      expect(res.status).toBe(HttpStatus.CONFLICT);
+      expect(res.body.error.code).toBe('PRODUCT_ARCHIVED');
+    });
+
+    it('1.20 should reject upload-url when product is BLOCKED (409 PRODUCT_BLOCKED)', async () => {
+      inMemoryProductRepo.set({
+        _id: productId,
+        shop_id: shopId,
+        title: 'Blocked SPU',
+        status: ProductStatus.BLOCKED,
+      } as unknown as ProductDocument);
+
+      const payload = {
+        content_type: 'image/jpeg',
+        size_bytes: 1024,
+        sha256: validSha256,
+      };
+
+      const res = await request(app.getHttpServer())
+        .post(`/seller/products/${productId}/media/upload-url`)
+        .set(defaultHeaders)
+        .send(payload);
+
+      expect(res.status).toBe(HttpStatus.CONFLICT);
+      expect(res.body.error.code).toBe('PRODUCT_BLOCKED');
+    });
   });
 
   // =========================================================================
@@ -832,6 +895,71 @@ describe('MediaModule Integration Tests [PCAT-B05]', () => {
       expect(res.status).toBe(HttpStatus.NOT_FOUND);
       expect(res.body.error.code).toBe('PRODUCT_NOT_FOUND');
     });
+
+    it('2.9 should reject complete when media status is not UPLOADING (400 PRODUCT_MEDIA_INVALID)', async () => {
+      // Set media status to READY
+      await inMemoryMediaRepo.updateStatus(mediaId, productId, MediaStatus.READY);
+
+      const payload = {
+        media_id: mediaId,
+        object_key: objectKey,
+        sha256: validSha256,
+      };
+
+      const res = await request(app.getHttpServer())
+        .post(`/seller/products/${productId}/media/complete`)
+        .set(defaultHeaders)
+        .send(payload);
+
+      expect(res.status).toBe(HttpStatus.BAD_REQUEST);
+      expect(res.body.error.code).toBe('PRODUCT_MEDIA_INVALID');
+    });
+
+    it('2.10 should reject complete when product is ARCHIVED (409 PRODUCT_ARCHIVED)', async () => {
+      inMemoryProductRepo.set({
+        _id: productId,
+        shop_id: shopId,
+        title: 'Archived SPU',
+        status: ProductStatus.ARCHIVED,
+      } as unknown as ProductDocument);
+
+      const payload = {
+        media_id: mediaId,
+        object_key: objectKey,
+        sha256: validSha256,
+      };
+
+      const res = await request(app.getHttpServer())
+        .post(`/seller/products/${productId}/media/complete`)
+        .set(defaultHeaders)
+        .send(payload);
+
+      expect(res.status).toBe(HttpStatus.CONFLICT);
+      expect(res.body.error.code).toBe('PRODUCT_ARCHIVED');
+    });
+
+    it('2.11 should reject complete when product is BLOCKED (409 PRODUCT_BLOCKED)', async () => {
+      inMemoryProductRepo.set({
+        _id: productId,
+        shop_id: shopId,
+        title: 'Blocked SPU',
+        status: ProductStatus.BLOCKED,
+      } as unknown as ProductDocument);
+
+      const payload = {
+        media_id: mediaId,
+        object_key: objectKey,
+        sha256: validSha256,
+      };
+
+      const res = await request(app.getHttpServer())
+        .post(`/seller/products/${productId}/media/complete`)
+        .set(defaultHeaders)
+        .send(payload);
+
+      expect(res.status).toBe(HttpStatus.CONFLICT);
+      expect(res.body.error.code).toBe('PRODUCT_BLOCKED');
+    });
   });
 
   // =========================================================================
@@ -1016,6 +1144,38 @@ describe('MediaModule Integration Tests [PCAT-B05]', () => {
       expect(res.status).toBe(HttpStatus.NOT_FOUND);
       expect(res.body.error.code).toBe('PRODUCT_NOT_FOUND');
     });
+
+    it('4.5 should reject delete when product is ARCHIVED (409 PRODUCT_ARCHIVED)', async () => {
+      inMemoryProductRepo.set({
+        _id: productId,
+        shop_id: shopId,
+        title: 'Archived SPU',
+        status: ProductStatus.ARCHIVED,
+      } as unknown as ProductDocument);
+
+      const res = await request(app.getHttpServer())
+        .delete(`/seller/products/${productId}/media/${mediaId}`)
+        .set(defaultHeaders);
+
+      expect(res.status).toBe(HttpStatus.CONFLICT);
+      expect(res.body.error.code).toBe('PRODUCT_ARCHIVED');
+    });
+
+    it('4.6 should reject delete when product is BLOCKED (409 PRODUCT_BLOCKED)', async () => {
+      inMemoryProductRepo.set({
+        _id: productId,
+        shop_id: shopId,
+        title: 'Blocked SPU',
+        status: ProductStatus.BLOCKED,
+      } as unknown as ProductDocument);
+
+      const res = await request(app.getHttpServer())
+        .delete(`/seller/products/${productId}/media/${mediaId}`)
+        .set(defaultHeaders);
+
+      expect(res.status).toBe(HttpStatus.CONFLICT);
+      expect(res.body.error.code).toBe('PRODUCT_BLOCKED');
+    });
   });
 
   // =========================================================================
@@ -1059,6 +1219,20 @@ describe('MediaModule Integration Tests [PCAT-B05]', () => {
 
       expect(res.status).toBe(HttpStatus.FORBIDDEN);
       expect(res.body.error.code).toBe('PRODUCT_FORBIDDEN');
+    });
+
+    it('5.4 should allow access for user with SELLER_STAFF role', async () => {
+      const res = await request(app.getHttpServer())
+        .get(`/seller/products/${productId}/media`)
+        .set({
+          'x-user-id': userId,
+          'x-user-roles': 'SELLER_STAFF',
+          'x-user-permissions': 'catalog:product:read',
+          'x-user-shop-scope': shopId,
+        });
+
+      expect(res.status).toBe(HttpStatus.OK);
+      expect(Array.isArray(res.body.data)).toBe(true);
     });
   });
 });

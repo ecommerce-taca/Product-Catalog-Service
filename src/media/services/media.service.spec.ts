@@ -12,7 +12,7 @@ import { ProductMediaRepositoryPort } from '../repositories/product-media.reposi
 import { S3StorageService } from '../../integrations/storage/s3-storage.service';
 import { TransactionRunner } from '../../database/transaction.runner';
 import { ClientSession } from 'mongoose';
-import { ProductDocument } from '../../database/schemas/product.schema';
+import { ProductDocument, ProductStatus } from '../../database/schemas/product.schema';
 import { SkuDocument } from '../../database/schemas/sku.schema';
 import {
   MediaScope,
@@ -45,7 +45,7 @@ describe('MediaService', () => {
     _id: productId,
     shop_id: shopId,
     title: 'Test SPU',
-    status: 'DRAFT',
+    status: ProductStatus.DRAFT,
   } as unknown as ProductDocument;
 
   beforeEach(async () => {
@@ -236,6 +236,41 @@ describe('MediaService', () => {
         service.requestUploadUrl(shopId, productId, actorUserId, invalidShaDto),
       ).rejects.toThrow(BadRequestException);
     });
+
+    it('should reject when is_cover is true for video content-type (400 Bad Request)', async () => {
+      const videoCoverDto: UploadUrlDto = {
+        content_type: 'video/mp4',
+        size_bytes: 10485760,
+        sha256: validSha256,
+        is_cover: true,
+      };
+
+      await expect(
+        service.requestUploadUrl(shopId, productId, actorUserId, videoCoverDto),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('should reject requestUploadUrl when product is ARCHIVED (409 Conflict)', async () => {
+      mockProductRepo.findById!.mockResolvedValueOnce({
+        ...mockProduct,
+        status: ProductStatus.ARCHIVED,
+      } as ProductDocument);
+
+      await expect(
+        service.requestUploadUrl(shopId, productId, actorUserId, validImageDto),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('should reject requestUploadUrl when product is BLOCKED (409 Conflict)', async () => {
+      mockProductRepo.findById!.mockResolvedValueOnce({
+        ...mockProduct,
+        status: ProductStatus.BLOCKED,
+      } as ProductDocument);
+
+      await expect(
+        service.requestUploadUrl(shopId, productId, actorUserId, validImageDto),
+      ).rejects.toThrow(ConflictException);
+    });
   });
 
   describe('completeUpload', () => {
@@ -314,6 +349,39 @@ describe('MediaService', () => {
         service.completeUpload(shopId, productId, actorUserId, completeDto),
       ).rejects.toThrow(BadRequestException);
     });
+
+    it('should reject complete when media status is not UPLOADING (400 Bad Request)', async () => {
+      mockMediaRepo.findByProductIdAndMediaId!.mockResolvedValueOnce({
+        ...existingMedia,
+        status: MediaStatus.READY,
+      } as ProductMediaDocument);
+
+      await expect(
+        service.completeUpload(shopId, productId, actorUserId, completeDto),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('should reject completeUpload when product is ARCHIVED (409 Conflict)', async () => {
+      mockProductRepo.findById!.mockResolvedValueOnce({
+        ...mockProduct,
+        status: ProductStatus.ARCHIVED,
+      } as ProductDocument);
+
+      await expect(
+        service.completeUpload(shopId, productId, actorUserId, completeDto),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('should reject completeUpload when product is BLOCKED (409 Conflict)', async () => {
+      mockProductRepo.findById!.mockResolvedValueOnce({
+        ...mockProduct,
+        status: ProductStatus.BLOCKED,
+      } as ProductDocument);
+
+      await expect(
+        service.completeUpload(shopId, productId, actorUserId, completeDto),
+      ).rejects.toThrow(ConflictException);
+    });
   });
 
   describe('listMedia', () => {
@@ -369,6 +437,28 @@ describe('MediaService', () => {
 
       await expect(service.deleteMedia(shopId, productId, 'nonexistent')).rejects.toThrow(
         NotFoundException,
+      );
+    });
+
+    it('should reject deleteMedia when product is ARCHIVED (409 Conflict)', async () => {
+      mockProductRepo.findById!.mockResolvedValueOnce({
+        ...mockProduct,
+        status: ProductStatus.ARCHIVED,
+      } as ProductDocument);
+
+      await expect(service.deleteMedia(shopId, productId, 'media-1')).rejects.toThrow(
+        ConflictException,
+      );
+    });
+
+    it('should reject deleteMedia when product is BLOCKED (409 Conflict)', async () => {
+      mockProductRepo.findById!.mockResolvedValueOnce({
+        ...mockProduct,
+        status: ProductStatus.BLOCKED,
+      } as ProductDocument);
+
+      await expect(service.deleteMedia(shopId, productId, 'media-1')).rejects.toThrow(
+        ConflictException,
       );
     });
   });

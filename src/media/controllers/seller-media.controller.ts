@@ -14,13 +14,12 @@ import {
 } from '../dtos/media-response.dto';
 
 @Controller('seller/products/:productId/media')
-@Roles('SELLER')
+@Roles('SELLER', 'SELLER_STAFF')
 export class SellerMediaController {
   constructor(private readonly mediaService: MediaService) {}
 
   @Post('upload-url')
   @HttpCode(HttpStatus.CREATED)
-  @Roles('SELLER')
   @Permissions('catalog:product:write')
   async requestUploadUrl(
     @Param('productId') productId: string,
@@ -34,7 +33,6 @@ export class SellerMediaController {
 
   @Post('complete')
   @HttpCode(HttpStatus.OK)
-  @Roles('SELLER')
   @Permissions('catalog:product:write')
   async completeUpload(
     @Param('productId') productId: string,
@@ -47,7 +45,6 @@ export class SellerMediaController {
   }
 
   @Get()
-  @Roles('SELLER')
   @Permissions('catalog:product:read')
   async listMedia(
     @Param('productId') productId: string,
@@ -59,7 +56,6 @@ export class SellerMediaController {
   }
 
   @Delete(':mediaId')
-  @Roles('SELLER')
   @Permissions('catalog:product:write')
   async deleteMedia(
     @Param('productId') productId: string,

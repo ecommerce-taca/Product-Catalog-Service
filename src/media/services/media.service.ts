@@ -17,6 +17,7 @@ import {
   MediaStatus,
   ProductMediaDocument,
 } from '../../database/schemas/product-media.schema';
+import { ProductStatus } from '../../database/schemas/product.schema';
 import { MAX_IMAGE_SIZE_BYTES, MAX_VIDEO_SIZE_BYTES, UploadUrlDto } from '../dtos/upload-url.dto';
 import { CompleteUploadDto } from '../dtos/complete-upload.dto';
 import {
@@ -81,6 +82,19 @@ export class MediaService {
       });
     }
 
+    if (product.status === ProductStatus.ARCHIVED) {
+      throw new ConflictException({
+        code: 'PRODUCT_ARCHIVED',
+        message: 'Không thể thao tác media trên sản phẩm đã bị lưu trữ.',
+      });
+    }
+    if (product.status === ProductStatus.BLOCKED) {
+      throw new ConflictException({
+        code: 'PRODUCT_BLOCKED',
+        message: 'Không thể thao tác media trên sản phẩm đã bị khóa.',
+      });
+    }
+
     // 2. If sku_id is provided, verify it belongs to this product
     if (dto.sku_id) {
       const sku = await this.skuRepository.findById(dto.sku_id);
@@ -100,6 +114,14 @@ export class MediaService {
       throw new BadRequestException({
         code: 'PRODUCT_MEDIA_INVALID',
         message: 'PRODUCT_MEDIA_INVALID',
+      });
+    }
+
+    if (isVideo && dto.is_cover === true) {
+      throw new BadRequestException({
+        code: 'PRODUCT_MEDIA_INVALID',
+        message:
+          'Ảnh bìa (cover) bắt buộc phải là hình ảnh (JPEG, PNG, WebP), video không thể làm cover.',
       });
     }
 
@@ -213,12 +235,32 @@ export class MediaService {
       });
     }
 
+    if (product.status === ProductStatus.ARCHIVED) {
+      throw new ConflictException({
+        code: 'PRODUCT_ARCHIVED',
+        message: 'Không thể thao tác media trên sản phẩm đã bị lưu trữ.',
+      });
+    }
+    if (product.status === ProductStatus.BLOCKED) {
+      throw new ConflictException({
+        code: 'PRODUCT_BLOCKED',
+        message: 'Không thể thao tác media trên sản phẩm đã bị khóa.',
+      });
+    }
+
     // 2. Find product_media record
     const media = await this.mediaRepository.findByProductIdAndMediaId(productId, dto.media_id);
     if (!media) {
       throw new NotFoundException({
         code: 'PRODUCT_MEDIA_NOT_FOUND',
         message: 'PRODUCT_MEDIA_NOT_FOUND',
+      });
+    }
+
+    if (media.status !== MediaStatus.UPLOADING) {
+      throw new BadRequestException({
+        code: 'PRODUCT_MEDIA_INVALID',
+        message: `Không thể hoàn tất media ở trạng thái ${media.status}. Chỉ media đang UPLOADING mới được hoàn tất.`,
       });
     }
 
@@ -324,6 +366,19 @@ export class MediaService {
       throw new ForbiddenException({
         code: 'FORBIDDEN',
         message: 'FORBIDDEN',
+      });
+    }
+
+    if (product.status === ProductStatus.ARCHIVED) {
+      throw new ConflictException({
+        code: 'PRODUCT_ARCHIVED',
+        message: 'Không thể thao tác media trên sản phẩm đã bị lưu trữ.',
+      });
+    }
+    if (product.status === ProductStatus.BLOCKED) {
+      throw new ConflictException({
+        code: 'PRODUCT_BLOCKED',
+        message: 'Không thể thao tác media trên sản phẩm đã bị khóa.',
       });
     }
 
