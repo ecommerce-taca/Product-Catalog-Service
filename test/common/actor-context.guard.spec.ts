@@ -15,10 +15,12 @@ describe('ActorContextGuard', () => {
     headers: Record<string, string> = {},
     isPublic = false,
     requiredRoles?: string[],
+    requiredPermissions?: string[],
   ): ExecutionContext => {
     jest.spyOn(reflector, 'getAllAndOverride').mockImplementation((key: unknown) => {
       if (key === 'isPublic') return isPublic;
       if (key === 'roles') return requiredRoles;
+      if (key === 'permissions') return requiredPermissions;
       return undefined;
     });
 
@@ -116,5 +118,87 @@ describe('ActorContextGuard', () => {
     const context = createMockExecutionContext(headers, false, ['SELLER']);
 
     expect(() => guard.canActivate(context)).toThrow(ForbiddenException);
+  });
+
+  describe('Permissions validation (Blocker B-1 fix)', () => {
+    it('should throw ForbiddenException (PRODUCT_FORBIDDEN) when user has empty permissions but route requires permissions', () => {
+      const headers = {
+        'x-user-id': 'seller-uuid',
+        'x-user-roles': 'SELLER',
+        // no x-user-permissions header -> actor.permissions = []
+      };
+
+      const context = createMockExecutionContext(
+        headers,
+        false,
+        ['SELLER'],
+        ['catalog:product:write'],
+      );
+
+      try {
+        guard.canActivate(context);
+        fail('Expected ForbiddenException');
+      } catch (err) {
+        expect(err).toBeInstanceOf(ForbiddenException);
+        const res = (err as ForbiddenException).getResponse() as Record<string, unknown>;
+        expect(res.code).toBe('PRODUCT_FORBIDDEN');
+        expect(res.message).toBe('Insufficient permissions');
+      }
+    });
+
+    it('should throw ForbiddenException when user lacks one of the required permissions', () => {
+      const headers = {
+        'x-user-id': 'seller-uuid',
+        'x-user-roles': 'SELLER',
+        'x-user-permissions': 'catalog:product:read',
+      };
+
+      const context = createMockExecutionContext(
+        headers,
+        false,
+        ['SELLER'],
+        ['catalog:product:read', 'catalog:product:write'],
+      );
+
+      try {
+        guard.canActivate(context);
+        fail('Expected ForbiddenException');
+      } catch (err) {
+        expect(err).toBeInstanceOf(ForbiddenException);
+        const res = (err as ForbiddenException).getResponse() as Record<string, unknown>;
+        expect(res.code).toBe('PRODUCT_FORBIDDEN');
+        expect(res.message).toBe('Insufficient permissions');
+      }
+    });
+
+    it('should allow user when all required permissions are present', () => {
+      const headers = {
+        'x-user-id': 'seller-uuid',
+        'x-user-roles': 'SELLER',
+        'x-user-permissions': 'catalog:product:read, catalog:product:write',
+      };
+
+      const context = createMockExecutionContext(
+        headers,
+        false,
+        ['SELLER'],
+        ['catalog:product:read', 'catalog:product:write'],
+      );
+
+      expect(guard.canActivate(context)).toBe(true);
+    });
+
+    it('should allow SUPER_ADMIN even if required permissions are not present', () => {
+      const headers = {
+        'x-user-id': 'admin-uuid',
+        'x-user-roles': 'SUPER_ADMIN',
+      };
+
+      const context = createMockExecutionContext(headers, false, undefined, [
+        'catalog:product:write',
+      ]);
+
+      expect(guard.canActivate(context)).toBe(true);
+    });
   });
 });

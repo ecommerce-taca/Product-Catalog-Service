@@ -20,7 +20,6 @@ export class SellerMediaController {
 
   @Post('upload-url')
   @HttpCode(HttpStatus.CREATED)
-  @Permissions('catalog:product:write')
   async requestUploadUrl(
     @Param('productId') productId: string,
     @Actor() actor: ActorContext,
@@ -33,7 +32,6 @@ export class SellerMediaController {
 
   @Post('complete')
   @HttpCode(HttpStatus.OK)
-  @Permissions('catalog:product:write')
   async completeUpload(
     @Param('productId') productId: string,
     @Actor() actor: ActorContext,

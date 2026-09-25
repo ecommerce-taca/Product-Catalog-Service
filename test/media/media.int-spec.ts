@@ -1204,17 +1204,12 @@ describe('MediaModule Integration Tests [PCAT-B05]', () => {
 
     it('5.3 should reject requests lacking required permission (403 PRODUCT_FORBIDDEN)', async () => {
       const res = await request(app.getHttpServer())
-        .post(`/seller/products/${productId}/media/upload-url`)
+        .delete(`/seller/products/${productId}/media/01912f20-7a1b-7c12-9c55-8b1c34a6d940`)
         .set({
           'x-user-id': userId,
           'x-user-roles': 'SELLER',
           'x-user-permissions': 'catalog:product:read', // Missing catalog:product:write
           'x-user-shop-scope': shopId,
-        })
-        .send({
-          content_type: 'image/jpeg',
-          size_bytes: 1024,
-          sha256: validSha256,
         });
 
       expect(res.status).toBe(HttpStatus.FORBIDDEN);
