@@ -16,7 +16,7 @@ import { AuditModule } from '../audit/audit.module';
     MongooseModule.forFeature([{ name: ProductMedia.name, schema: ProductMediaSchema }]),
     StorageModule,
     forwardRef(() => ProductModule),
-    SkuModule,
+    forwardRef(() => SkuModule),
     DatabaseModule,
     OutboxModule,
     AuditModule,

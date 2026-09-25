@@ -5,6 +5,7 @@ import {
   Inject,
   Injectable,
   NotFoundException,
+  forwardRef,
 } from '@nestjs/common';
 import { v7 as uuidv7 } from 'uuid';
 import { ProductRepositoryPort } from '../../product/repositories/product.repository.interface';
@@ -47,9 +48,9 @@ const SHA256_REGEX = /^[0-9a-fA-F]{64}$/;
 @Injectable()
 export class MediaService {
   constructor(
-    @Inject('ProductRepositoryPort')
+    @Inject(forwardRef(() => 'ProductRepositoryPort'))
     private readonly productRepository: ProductRepositoryPort,
-    @Inject('SkuRepositoryPort')
+    @Inject(forwardRef(() => 'SkuRepositoryPort'))
     private readonly skuRepository: SkuRepositoryPort,
     @Inject('ProductMediaRepositoryPort')
     private readonly mediaRepository: ProductMediaRepositoryPort,
