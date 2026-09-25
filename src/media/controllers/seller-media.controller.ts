@@ -1,6 +1,5 @@
 import { Body, Controller, Delete, Get, HttpCode, HttpStatus, Param, Post } from '@nestjs/common';
 import { Roles } from '../../common/decorators/roles.decorator';
-import { Permissions } from '../../common/decorators/permissions.decorator';
 import { Actor } from '../../common/decorators/actor.decorator';
 import { ShopScope } from '../../common/decorators/shop-scope.decorator';
 import { ActorContext } from '../../common/context/actor-context.interface';
@@ -43,7 +42,6 @@ export class SellerMediaController {
   }
 
   @Get()
-  @Permissions('catalog:product:read')
   async listMedia(
     @Param('productId') productId: string,
     @Actor() actor: ActorContext,
@@ -54,7 +52,6 @@ export class SellerMediaController {
   }
 
   @Delete(':mediaId')
-  @Permissions('catalog:product:write')
   async deleteMedia(
     @Param('productId') productId: string,
     @Param('mediaId') mediaId: string,

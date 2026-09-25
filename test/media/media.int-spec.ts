@@ -224,7 +224,7 @@ describe('MediaModule Integration Tests [PCAT-B05]', () => {
   const defaultHeaders = {
     'x-user-id': userId,
     'x-user-roles': 'SELLER',
-    'x-user-permissions': 'catalog:product:write,catalog:product:read',
+    'x-user-permissions': 'PRODUCT_WRITE,PRODUCT_PUBLISH',
     'x-user-shop-scope': shopId,
   };
 
@@ -1202,13 +1202,12 @@ describe('MediaModule Integration Tests [PCAT-B05]', () => {
       expect(res.body.error.code).toBe('PRODUCT_FORBIDDEN');
     });
 
-    it('5.3 should reject requests lacking required permission (403 PRODUCT_FORBIDDEN)', async () => {
+    it('5.3 should reject requests with non-SELLER role e.g. BUYER on DELETE endpoint (403 PRODUCT_FORBIDDEN)', async () => {
       const res = await request(app.getHttpServer())
         .delete(`/seller/products/${productId}/media/01912f20-7a1b-7c12-9c55-8b1c34a6d940`)
         .set({
           'x-user-id': userId,
-          'x-user-roles': 'SELLER',
-          'x-user-permissions': 'catalog:product:read', // Missing catalog:product:write
+          'x-user-roles': 'BUYER',
           'x-user-shop-scope': shopId,
         });
 
@@ -1222,7 +1221,7 @@ describe('MediaModule Integration Tests [PCAT-B05]', () => {
         .set({
           'x-user-id': userId,
           'x-user-roles': 'SELLER_STAFF',
-          'x-user-permissions': 'catalog:product:read',
+          'x-user-permissions': 'PRODUCT_WRITE,PRODUCT_PUBLISH',
           'x-user-shop-scope': shopId,
         });
 
