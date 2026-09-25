@@ -3,6 +3,8 @@ import { MongooseModule } from '@nestjs/mongoose';
 import { Sku, SkuSchema } from '../database/schemas/sku.schema';
 import { AttributeModule } from '../attribute/attribute.module';
 import { ProductModule } from '../product/product.module';
+import { OutboxModule } from '../outbox/outbox.module';
+import { AuditModule } from '../audit/audit.module';
 import { SkuRepository } from './repositories/sku.repository';
 import { VariantResolver } from './services/variant-resolver.service';
 import { SkuService } from './services/sku.service';
@@ -13,6 +15,8 @@ import { SellerSkuController } from './controllers/seller-sku.controller';
     MongooseModule.forFeature([{ name: Sku.name, schema: SkuSchema }]),
     AttributeModule,
     forwardRef(() => ProductModule),
+    OutboxModule,
+    AuditModule,
   ],
   controllers: [SellerSkuController],
   providers: [

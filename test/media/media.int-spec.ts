@@ -21,6 +21,8 @@ import { SkuDocument } from '../../src/database/schemas/sku.schema';
 import { ProductMediaRepositoryPort } from '../../src/media/repositories/product-media.repository.interface';
 import { ProductRepositoryPort } from '../../src/product/repositories/product.repository.interface';
 import { SkuRepositoryPort } from '../../src/sku/repositories/sku.repository.interface';
+import { OutboxRepositoryPort } from '../../src/outbox/repositories/outbox.repository.interface';
+import { CatalogAuditRepositoryPort } from '../../src/audit/repositories/audit.repository.interface';
 
 // --- In-Memory Repositories & Test Doubles ---
 
@@ -87,6 +89,10 @@ class InMemoryProductMediaRepository implements ProductMediaRepositoryPort {
         }
         return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
       });
+  }
+
+  async findActiveByProductId(productId: string): Promise<ProductMediaDocument[]> {
+    return this.findByProductId(productId);
   }
 
   async findByProductIdAndMediaId(
@@ -210,6 +216,16 @@ describe('MediaModule Integration Tests [PCAT-B05]', () => {
       ),
   };
 
+  const mockOutboxRepo = {
+    saveEvent: jest.fn().mockImplementation(async (event: unknown) => event),
+    create: jest.fn().mockImplementation(async (event: unknown) => event),
+  };
+
+  const mockAuditRepo = {
+    create: jest.fn().mockImplementation(async (audit: unknown) => audit),
+    record: jest.fn().mockImplementation(async (audit: unknown) => audit),
+  };
+
   // Common Test Fixtures
   const shopId = '01912f20-7a1b-7c12-9c55-8b1c34a6d920';
   const otherShopId = '01912f20-7a1b-7c12-9c55-8b1c34a6d999';
@@ -242,6 +258,8 @@ describe('MediaModule Integration Tests [PCAT-B05]', () => {
         { provide: 'ProductMediaRepositoryPort', useValue: inMemoryMediaRepo },
         { provide: S3StorageService, useValue: mockStorageService },
         { provide: TransactionRunner, useValue: mockTransactionRunner },
+        { provide: OutboxRepositoryPort, useValue: mockOutboxRepo },
+        { provide: CatalogAuditRepositoryPort, useValue: mockAuditRepo },
         Reflector,
       ],
     }).compile();
@@ -604,7 +622,7 @@ describe('MediaModule Integration Tests [PCAT-B05]', () => {
         .send(payload);
 
       expect(res.status).toBe(HttpStatus.FORBIDDEN);
-      expect(res.body.error.code).toBe('FORBIDDEN');
+      expect(res.body.error.code).toBe('PRODUCT_FORBIDDEN');
     });
 
     it('1.17 should return 404 when product does not exist (404 PRODUCT_NOT_FOUND)', async () => {
@@ -664,7 +682,7 @@ describe('MediaModule Integration Tests [PCAT-B05]', () => {
       expect(res.body.error.code).toBe('PRODUCT_ARCHIVED');
     });
 
-    it('1.20 should reject upload-url when product is BLOCKED (409 PRODUCT_BLOCKED)', async () => {
+    it('1.20 should reject upload-url when product is BLOCKED (403 PRODUCT_BLOCKED)', async () => {
       inMemoryProductRepo.set({
         _id: productId,
         shop_id: shopId,
@@ -683,7 +701,7 @@ describe('MediaModule Integration Tests [PCAT-B05]', () => {
         .set(defaultHeaders)
         .send(payload);
 
-      expect(res.status).toBe(HttpStatus.CONFLICT);
+      expect(res.status).toBe(HttpStatus.FORBIDDEN);
       expect(res.body.error.code).toBe('PRODUCT_BLOCKED');
     });
   });
@@ -787,7 +805,7 @@ describe('MediaModule Integration Tests [PCAT-B05]', () => {
       expect(readyCovers[0]._id).toBe(coverMediaId2);
     });
 
-    it('2.3 should reject complete when media_id does not exist (404 PRODUCT_MEDIA_NOT_FOUND)', async () => {
+    it('2.3 should reject complete when media_id does not exist (404 PRODUCT_NOT_FOUND)', async () => {
       const nonExistentMediaId = '01912f20-7a1b-7c12-9c55-8b1c34a6d000';
       const payload = {
         media_id: nonExistentMediaId,
@@ -801,7 +819,7 @@ describe('MediaModule Integration Tests [PCAT-B05]', () => {
         .send(payload);
 
       expect(res.status).toBe(HttpStatus.NOT_FOUND);
-      expect(res.body.error.code).toBe('PRODUCT_MEDIA_NOT_FOUND');
+      expect(res.body.error.code).toBe('PRODUCT_NOT_FOUND');
     });
 
     it('2.4 should reject complete when object_key does not match (400 PRODUCT_MEDIA_INVALID)', async () => {
@@ -876,7 +894,7 @@ describe('MediaModule Integration Tests [PCAT-B05]', () => {
         .send(payload);
 
       expect(res.status).toBe(HttpStatus.FORBIDDEN);
-      expect(res.body.error.code).toBe('FORBIDDEN');
+      expect(res.body.error.code).toBe('PRODUCT_FORBIDDEN');
     });
 
     it('2.8 should return 404 when product does not exist on complete', async () => {
@@ -938,7 +956,7 @@ describe('MediaModule Integration Tests [PCAT-B05]', () => {
       expect(res.body.error.code).toBe('PRODUCT_ARCHIVED');
     });
 
-    it('2.11 should reject complete when product is BLOCKED (409 PRODUCT_BLOCKED)', async () => {
+    it('2.11 should reject complete when product is BLOCKED (403 PRODUCT_BLOCKED)', async () => {
       inMemoryProductRepo.set({
         _id: productId,
         shop_id: shopId,
@@ -957,7 +975,7 @@ describe('MediaModule Integration Tests [PCAT-B05]', () => {
         .set(defaultHeaders)
         .send(payload);
 
-      expect(res.status).toBe(HttpStatus.CONFLICT);
+      expect(res.status).toBe(HttpStatus.FORBIDDEN);
       expect(res.body.error.code).toBe('PRODUCT_BLOCKED');
     });
   });
@@ -1060,7 +1078,7 @@ describe('MediaModule Integration Tests [PCAT-B05]', () => {
         });
 
       expect(res.status).toBe(HttpStatus.FORBIDDEN);
-      expect(res.body.error.code).toBe('FORBIDDEN');
+      expect(res.body.error.code).toBe('PRODUCT_FORBIDDEN');
     });
 
     it('3.3 should return 404 when product does not exist', async () => {
@@ -1113,14 +1131,14 @@ describe('MediaModule Integration Tests [PCAT-B05]', () => {
       expect(listRes.body.data.length).toBe(0);
     });
 
-    it('4.2 should return 404 when media_id does not exist (404 PRODUCT_MEDIA_NOT_FOUND)', async () => {
+    it('4.2 should return 404 when media_id does not exist (404 PRODUCT_NOT_FOUND)', async () => {
       const nonExistentMediaId = '01912f20-7a1b-7c12-9c55-8b1c34a6d000';
       const res = await request(app.getHttpServer())
         .delete(`/seller/products/${productId}/media/${nonExistentMediaId}`)
         .set(defaultHeaders);
 
       expect(res.status).toBe(HttpStatus.NOT_FOUND);
-      expect(res.body.error.code).toBe('PRODUCT_MEDIA_NOT_FOUND');
+      expect(res.body.error.code).toBe('PRODUCT_NOT_FOUND');
     });
 
     it('4.3 [IDOR Boundary] should reject delete when product belongs to another shop (403 Forbidden)', async () => {
@@ -1132,7 +1150,7 @@ describe('MediaModule Integration Tests [PCAT-B05]', () => {
         });
 
       expect(res.status).toBe(HttpStatus.FORBIDDEN);
-      expect(res.body.error.code).toBe('FORBIDDEN');
+      expect(res.body.error.code).toBe('PRODUCT_FORBIDDEN');
     });
 
     it('4.4 should return 404 when product does not exist on delete', async () => {
@@ -1161,7 +1179,7 @@ describe('MediaModule Integration Tests [PCAT-B05]', () => {
       expect(res.body.error.code).toBe('PRODUCT_ARCHIVED');
     });
 
-    it('4.6 should reject delete when product is BLOCKED (409 PRODUCT_BLOCKED)', async () => {
+    it('4.6 should reject delete when product is BLOCKED (403 PRODUCT_BLOCKED)', async () => {
       inMemoryProductRepo.set({
         _id: productId,
         shop_id: shopId,
@@ -1173,7 +1191,7 @@ describe('MediaModule Integration Tests [PCAT-B05]', () => {
         .delete(`/seller/products/${productId}/media/${mediaId}`)
         .set(defaultHeaders);
 
-      expect(res.status).toBe(HttpStatus.CONFLICT);
+      expect(res.status).toBe(HttpStatus.FORBIDDEN);
       expect(res.body.error.code).toBe('PRODUCT_BLOCKED');
     });
   });

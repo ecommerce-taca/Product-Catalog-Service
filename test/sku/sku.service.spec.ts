@@ -11,6 +11,8 @@ import { VariantResolver } from '../../src/sku/services/variant-resolver.service
 import { AttributeDefinitionRepositoryPort } from '../../src/attribute/repositories/attribute-definition.repository.interface';
 import { SkuRepositoryPort } from '../../src/sku/repositories/sku.repository.interface';
 import { ProductRepositoryPort } from '../../src/product/repositories/product.repository.interface';
+import { OutboxRepositoryPort } from '../../src/outbox/repositories/outbox.repository.interface';
+import { CatalogAuditRepositoryPort } from '../../src/audit/repositories/audit.repository.interface';
 import { TransactionRunner } from '../../src/database/transaction.runner';
 import { ProductDocument, ProductStatus } from '../../src/database/schemas/product.schema';
 import { SkuDocument, SkuStatus } from '../../src/database/schemas/sku.schema';
@@ -23,6 +25,8 @@ describe('SkuService', () => {
   let mockAttrDefRepo: jest.Mocked<AttributeDefinitionRepositoryPort>;
   let mockSkuRepo: jest.Mocked<SkuRepositoryPort>;
   let mockTransactionRunner: jest.Mocked<TransactionRunner>;
+  let mockOutboxRepo: jest.Mocked<OutboxRepositoryPort>;
+  let mockAuditRepo: jest.Mocked<CatalogAuditRepositoryPort>;
   let mockSession: ClientSession;
 
   const mockShopId = '01912f30-7a1b-7c12-9c55-8b1c34a6d920';
@@ -126,6 +130,16 @@ describe('SkuService', () => {
       bulkUpsert: jest.fn().mockResolvedValue(undefined),
     } as unknown as jest.Mocked<SkuRepositoryPort>;
 
+    mockOutboxRepo = {
+      saveEvent: jest.fn().mockResolvedValue({} as any),
+      create: jest.fn().mockResolvedValue({} as any),
+    } as unknown as jest.Mocked<OutboxRepositoryPort>;
+
+    mockAuditRepo = {
+      create: jest.fn().mockResolvedValue({} as any),
+      record: jest.fn().mockResolvedValue({} as any),
+    } as unknown as jest.Mocked<CatalogAuditRepositoryPort>;
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         SkuService,
@@ -145,6 +159,14 @@ describe('SkuService', () => {
         {
           provide: TransactionRunner,
           useValue: mockTransactionRunner,
+        },
+        {
+          provide: OutboxRepositoryPort,
+          useValue: mockOutboxRepo,
+        },
+        {
+          provide: CatalogAuditRepositoryPort,
+          useValue: mockAuditRepo,
         },
       ],
     }).compile();
@@ -241,6 +263,25 @@ describe('SkuService', () => {
         sale_price: 199000,
         currency: 'VND',
       });
+
+      // Verify transactional outbox event & audit log (SF-4)
+      expect(mockOutboxRepo.saveEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event_type: 'product.skus_updated',
+          topic: 'product.events.v1',
+          aggregate_type: 'PRODUCT',
+          aggregate_id: mockProductId,
+        }),
+        mockSession,
+      );
+      expect(mockAuditRepo.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          action: 'SKU_CONFIGURED',
+          entity_type: 'SKU',
+          entity_id: mockProductId,
+        }),
+        mockSession,
+      );
     });
 
     it('should throw NotFoundException (PRODUCT_NOT_FOUND) when product does not exist', async () => {

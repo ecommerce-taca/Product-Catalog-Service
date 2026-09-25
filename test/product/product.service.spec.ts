@@ -55,6 +55,11 @@ describe('ProductService', () => {
     saveEvent: jest.fn(),
   };
 
+  const mockMediaRepository = {
+    findByProductId: jest.fn().mockResolvedValue([]),
+    findActiveByProductId: jest.fn().mockResolvedValue([]),
+  };
+
   const mockTransactionRunner = {
     execute: jest.fn().mockImplementation((cb: (session: unknown) => Promise<unknown>) => cb({})),
   };
@@ -92,6 +97,10 @@ describe('ProductService', () => {
         {
           provide: OutboxRepositoryPort,
           useValue: mockOutboxRepository,
+        },
+        {
+          provide: 'ProductMediaRepositoryPort',
+          useValue: mockMediaRepository,
         },
         {
           provide: TransactionRunner,
@@ -274,6 +283,15 @@ describe('ProductService', () => {
         { category_id: 'cat-02', is_primary: false },
       ]);
 
+      mockMediaRepository.findActiveByProductId.mockResolvedValue([
+        {
+          _id: 'media-01',
+          object_key: 'products/shop-1/product-1/media-01.jpg',
+          status: 'READY',
+          is_cover: true,
+        },
+      ]);
+
       const result = await service.getSellerProductDetail(actorShopId, 'prod-01');
 
       expect(result.product_id).toBe('prod-01');
@@ -281,6 +299,13 @@ describe('ProductService', () => {
       expect(result.skus).toHaveLength(1);
       expect(result.categories.primary_category_id).toBe('cat-01');
       expect(result.categories.secondary_category_ids).toEqual(['cat-02']);
+      expect(result.media).toHaveLength(1);
+      expect(result.media[0]).toEqual({
+        media_id: 'media-01',
+        url: 'products/shop-1/product-1/media-01.jpg',
+        status: 'READY',
+        is_cover: true,
+      });
     });
   });
 

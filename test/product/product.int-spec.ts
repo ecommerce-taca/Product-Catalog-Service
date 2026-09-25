@@ -163,6 +163,11 @@ describe('Product Core Integration & IDOR Security Spec [TEST-B04]', () => {
     }),
   };
 
+  const mockProductMediaRepository = {
+    findByProductId: jest.fn().mockResolvedValue([]),
+    findActiveByProductId: jest.fn().mockResolvedValue([]),
+  };
+
   const mockOutboxRepository = {
     saveEvent: jest.fn().mockImplementation(async (event: any) => {
       savedOutboxEvents.push(event);
@@ -259,6 +264,7 @@ describe('Product Core Integration & IDOR Security Spec [TEST-B04]', () => {
           useValue: mockAttributeDefinitionRepository,
         },
         { provide: 'SkuRepositoryPort', useValue: mockSkuRepository },
+        { provide: 'ProductMediaRepositoryPort', useValue: mockProductMediaRepository },
         { provide: OutboxRepositoryPort, useValue: mockOutboxRepository },
         { provide: TransactionRunner, useValue: mockTransactionRunner },
       ],

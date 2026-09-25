@@ -140,6 +140,11 @@ describe('Product Concurrency OCC Spec [TEST-B04]', () => {
     count: jest.fn().mockResolvedValue(0),
   };
 
+  const mockProductMediaRepository = {
+    findByProductId: jest.fn().mockResolvedValue([]),
+    findActiveByProductId: jest.fn().mockResolvedValue([]),
+  };
+
   const mockOutboxRepository = {
     saveEvent: jest.fn().mockImplementation(async (event: any) => {
       savedOutboxEvents.push(event);
@@ -191,6 +196,7 @@ describe('Product Concurrency OCC Spec [TEST-B04]', () => {
           useValue: mockAttributeDefinitionRepository,
         },
         { provide: 'SkuRepositoryPort', useValue: mockSkuRepository },
+        { provide: 'ProductMediaRepositoryPort', useValue: mockProductMediaRepository },
         { provide: OutboxRepositoryPort, useValue: mockOutboxRepository },
         { provide: TransactionRunner, useValue: mockTransactionRunner },
       ],

@@ -6,6 +6,8 @@ import { SkuModule } from '../sku/sku.module';
 import { AttributeModule } from '../attribute/attribute.module';
 import { OutboxModule } from '../outbox/outbox.module';
 import { DatabaseModule } from '../database/database.module';
+import { MediaModule } from '../media/media.module';
+import { StorageModule } from '../integrations/storage/storage.module';
 import { ProductRepository } from './repositories/product.repository';
 import { ProductService } from './services/product.service';
 import { SellerProductController } from './controllers/seller-product.controller';
@@ -18,6 +20,8 @@ import { SellerProductController } from './controllers/seller-product.controller
     AttributeModule,
     OutboxModule,
     DatabaseModule,
+    forwardRef(() => MediaModule),
+    StorageModule,
   ],
   controllers: [SellerProductController],
   providers: [
