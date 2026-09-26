@@ -32,7 +32,7 @@
 @superAdminId = usr-superadmin-01912f10-0004
 @superAdminRoles = SUPER_ADMIN
 
-# Biến động thực thi (Các ID này sẽ được cập nhật tự động hoặc điền thủ công)
+# Biến động thực thi (Các ID này sẽ được cập nhật tự động qua response hoặc điền thủ công)
 @categoryId = 01912f20-0000-7000-8000-000000000001
 @subCategoryId = 01912f20-0000-7000-8000-000000000002
 @productId = 01912f30-0000-7000-8000-000000000001
@@ -76,11 +76,10 @@ x-user-roles: {{adminRoles}}
   "slug": "thoi-trang-nam",
   "parent_id": null,
   "tax_rate_bps": 1000,
-  "is_leaf": false,
-  "display_order": 1
+  "sort_order": 1
 }
 
-### [1.3] Admin - Tạo danh mục con (Sub Category) kế thừa thuế suất từ cha
+### [1.3] Admin - Tạo danh mục con (Sub Category) kế thừa thuế suất từ cha (tax_rate_bps = null)
 # @name createSubCategory
 POST {{baseUrl}}/admin/catalog/categories
 Content-Type: application/json
@@ -93,15 +92,14 @@ x-user-roles: {{adminRoles}}
   "slug": "ao-khoac-nam",
   "parent_id": "{{createRootCategory.response.body.data.category_id}}",
   "tax_rate_bps": null,
-  "is_leaf": true,
-  "display_order": 1
+  "sort_order": 1
 }
 
 ### [1.4] Public - Lấy thông tin chi tiết một danh mục
 GET {{baseUrl}}/categories/{{createSubCategory.response.body.data.category_id}}
 Accept: application/json
 
-### [1.5] Admin - Cập nhật thông tin danh mục
+### [1.5] Admin - Cập nhật thông tin danh mục (Yêu cầu version)
 PATCH {{baseUrl}}/admin/catalog/categories/{{createSubCategory.response.body.data.category_id}}
 Content-Type: application/json
 Accept: application/json
@@ -109,8 +107,9 @@ x-user-id: {{adminId}}
 x-user-roles: {{adminRoles}}
 
 {
+  "version": 1,
   "name": "Áo Khoác Nam Cao Cấp",
-  "display_order": 2
+  "sort_order": 2
 }
 
 ### [1.6] Edge Case: Tạo vòng lặp chu kỳ danh mục (Cycle Detection)
@@ -122,6 +121,7 @@ x-user-id: {{adminId}}
 x-user-roles: {{adminRoles}}
 
 {
+  "version": 1,
   "parent_id": "{{createSubCategory.response.body.data.category_id}}"
 }
 
@@ -148,13 +148,13 @@ x-user-shop-scope: {{sellerShopScope}}
 
 {
   "title": "Áo Khoác Gió Nam Chống Nước 2026",
+  "slug": "ao-khoac-gio-nam-chong-nuoc-2026",
   "brand": "Taca Active",
   "description": "<p>Áo khoác gió cao cấp, chất liệu <strong>Polyester chống nước</strong> an toàn.</p>",
-  "package_dimensions": {
-    "weight_g": 350,
-    "length_cm": 30,
-    "width_cm": 20,
-    "height_cm": 5
+  "price_summary": {
+    "base_price": 450000,
+    "sale_price": 389000,
+    "currency": "VND"
   }
 }
 
@@ -215,11 +215,12 @@ x-user-roles: {{sellerRoles}}
 x-user-shop-scope: {{sellerShopScope}}
 
 {
+  "version": 2,
   "primary_category_id": "{{createSubCategory.response.body.data.category_id}}",
   "secondary_category_ids": []
 }
 
-### [3.2] Seller - Tạo ma trận biến thể SKUs (Giá nguyên VND BigInt, Variant Resolver)
+### [3.2] Seller - Tạo ma trận biến thể SKUs (Dynamic Attributes & Giá nguyên VND BigInt)
 # @name updateProductSkus
 PUT {{baseUrl}}/seller/products/{{createProductDraft.response.body.data.product_id}}/skus
 Content-Type: application/json
@@ -229,29 +230,40 @@ x-user-roles: {{sellerRoles}}
 x-user-shop-scope: {{sellerShopScope}}
 
 {
+  "version": 3,
+  "attribute_definitions": [
+    {
+      "key": "color",
+      "label": "Màu sắc",
+      "type": "STRING",
+      "is_variant_dimension": true,
+      "sort_order": 1
+    },
+    {
+      "key": "size",
+      "label": "Kích cỡ",
+      "type": "STRING",
+      "is_variant_dimension": true,
+      "sort_order": 2
+    }
+  ],
   "skus": [
     {
       "seller_sku": "AKG-NAM-DEN-L",
-      "price_override": {
-        "base_price": 450000,
-        "sale_price": 389000
+      "price_override": 389000,
+      "attributes": {
+        "color": "Đen",
+        "size": "L"
       },
-      "attributes": [
-        { "name": "Màu sắc", "value": "Đen" },
-        { "name": "Kích cỡ", "value": "L" }
-      ],
       "status": "ACTIVE"
     },
     {
       "seller_sku": "AKG-NAM-DEN-XL",
-      "price_override": {
-        "base_price": 450000,
-        "sale_price": 399000
+      "price_override": 399000,
+      "attributes": {
+        "color": "Đen",
+        "size": "XL"
       },
-      "attributes": [
-        { "name": "Màu sắc", "value": "Đen" },
-        { "name": "Kích cỡ", "value": "XL" }
-      ],
       "status": "ACTIVE"
     }
   ]
@@ -267,23 +279,31 @@ x-user-roles: {{sellerRoles}}
 x-user-shop-scope: {{sellerShopScope}}
 
 {
+  "attribute_definitions": [
+    {
+      "key": "color",
+      "label": "Màu sắc",
+      "type": "STRING",
+      "is_variant_dimension": true
+    }
+  ],
   "skus": [
     {
       "seller_sku": "AKG-NAM-DEN-L",
-      "price_override": { "base_price": 300000, "sale_price": 250000 },
-      "attributes": [{ "name": "Màu", "value": "Đen" }],
+      "price_override": 300000,
+      "attributes": { "color": "Đen" },
       "status": "ACTIVE"
     },
     {
       "seller_sku": "AKG-NAM-DEN-L",
-      "price_override": { "base_price": 300000, "sale_price": 250000 },
-      "attributes": [{ "name": "Màu", "value": "Đen Trùng" }],
+      "price_override": 300000,
+      "attributes": { "color": "Đen Trùng" },
       "status": "ACTIVE"
     }
   ]
 }
 
-### [3.4] Edge Case: Giá tiền âm hoặc số thực thập phân
+### [3.4] Edge Case: Giá tiền âm
 # Mong đợi: 400 Bad Request (PRODUCT_INVALID_INPUT)
 PUT {{baseUrl}}/seller/products/{{createProductDraft.response.body.data.product_id}}/skus
 Content-Type: application/json
@@ -293,14 +313,19 @@ x-user-roles: {{sellerRoles}}
 x-user-shop-scope: {{sellerShopScope}}
 
 {
+  "attribute_definitions": [
+    {
+      "key": "size",
+      "label": "Size",
+      "type": "STRING",
+      "is_variant_dimension": true
+    }
+  ],
   "skus": [
     {
       "seller_sku": "AKG-PRICE-INVALID",
-      "price_override": {
-        "base_price": -50000,
-        "sale_price": 399.99
-      },
-      "attributes": [{ "name": "Size", "value": "M" }],
+      "price_override": -50000,
+      "attributes": { "size": "M" },
       "status": "ACTIVE"
     }
   ]
@@ -407,7 +432,7 @@ Accept: application/json
 
 ### [6.3] Public - Batch Hydration qua product_ids (Dùng cho Giỏ hàng & Yêu thích)
 # Trả về các sản phẩm ACTIVE, giữ thứ tự client gửi, bỏ qua ID không hợp lệ mà không báo lỗi
-GET {{baseUrl}}/products?product_ids={{createProductDraft.response.body.data.product_id}},01912f30-non-existent-uuid
+GET {{baseUrl}}/products?product_ids={{createProductDraft.response.body.data.product_id}},01912f30-0000-0000-0000-000000000000
 Accept: application/json
 
 ### [6.4] Public - Chi tiết sản phẩm PDP (Product Detail Page)
