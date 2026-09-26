@@ -45,9 +45,12 @@ services:
   # Phục vụ tải ảnh/video sản phẩm (Batch 5) và xuất báo cáo CSV (Batch 8)
   # ==============================================================================
   minio:
-    image: minio/minio:latest
+    image: coollabsio/minio:latest
     container_name: product-catalog-minio
-    command: server /data --console-address ":9001"
+    entrypoint:
+      - /bin/sh
+      - -c
+      - "mkdir -p /data/taca-product-media-prod && minio server /data --console-address ':9001'"
     ports:
       - '9000:9000' # S3 API endpoint
       - '9001:9001' # Web Console UI
@@ -64,31 +67,12 @@ services:
       start_period: 5s
     restart: unless-stopped
 
-  minio-init:
-    image: minio/mc:latest
-    container_name: product-catalog-minio-init
-    restart: 'no'
-    depends_on:
-      minio:
-        condition: service_healthy
-    entrypoint: >
-      /bin/sh -c "
-      echo 'Configuring MinIO client alias...';
-      /usr/bin/mc alias set local http://minio:9000 minioadmin minioadmin;
-      echo 'Creating default bucket taca-product-media-prod...';
-      /usr/bin/mc mb --ignore-existing local/taca-product-media-prod;
-      echo 'Setting public download policy for media...';
-      /usr/bin/mc anonymous set download local/taca-product-media-prod;
-      echo 'MinIO storage initialization completed successfully.';
-      exit 0;
-      "
-
   # ==============================================================================
   # 3. EVENT BROKER LAYER: Apache Kafka (KRaft Mode - Single Node, No Zookeeper)
   # Phục vụ Ingestion Projections và CDC Outbox Event Bus
   # ==============================================================================
   kafka:
-    image: apache/kafka:3.8.0
+    image: apache/kafka:3.9.0
     container_name: product-catalog-kafka
     ports:
       - '9092:9092' # Host external port (truy cập từ máy local)
@@ -116,7 +100,7 @@ services:
     restart: unless-stopped
 
   kafka-init:
-    image: apache/kafka:3.8.0
+    image: apache/kafka:3.9.0
     container_name: product-catalog-kafka-init
     restart: 'no'
     depends_on:
@@ -178,8 +162,6 @@ services:
         condition: service_completed_successfully
       minio:
         condition: service_healthy
-      minio-init:
-        condition: service_completed_successfully
       kafka:
         condition: service_healthy
       kafka-init:
