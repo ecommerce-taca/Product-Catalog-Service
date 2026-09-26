@@ -104,10 +104,10 @@ function uploadMultipart(path, headers = {}, fileBuffer, filename = 'products.xl
       path: path,
       method: 'POST',
       headers: {
-        'Content-Type': `multipart/form-data; boundary=${boundary}`,
-        'Content-Length': bodyBuffer.length,
         'Accept': 'application/json',
         ...headers,
+        'Content-Type': `multipart/form-data; boundary=${boundary}`,
+        'Content-Length': bodyBuffer.length,
       },
     };
 
