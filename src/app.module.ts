@@ -19,6 +19,7 @@ import { ProjectionsModule } from './projections/projections.module';
 import { PublishPolicyModule } from './publish-policy/publish-policy.module';
 import { ModerationModule } from './moderation/moderation.module';
 import { ExportModule } from './export/export.module';
+import { ImportModule } from './import/import.module';
 import { CatalogQueryModule } from './catalog-query/catalog-query.module';
 import { TraceContextMiddleware } from './common/middleware/trace-context.middleware';
 import { ActorContextGuard } from './common/guards/actor-context.guard';
@@ -39,6 +40,7 @@ import { GlobalExceptionFilter } from './common/filters/global-exception.filter'
     AttributeModule,
     SkuModule,
     ExportModule,
+    ImportModule,
     ProductModule,
     StorageModule,
     MediaModule,
