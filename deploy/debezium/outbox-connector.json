@@ -1,0 +1,23 @@
+{
+  "name": "product-catalog-outbox-connector",
+  "config": {
+    "connector.class": "io.debezium.connector.mongodb.MongoDbConnector",
+    "mongodb.connection.string": "mongodb://mongo-replica-0:27017,mongo-replica-1:27017/?replicaSet=rs0",
+    "topic.prefix": "cdc",
+    "collection.include.list": "product_catalog.outbox_events",
+    "capture.mode": "change_streams_update_full",
+    "transforms": "outbox",
+    "transforms.outbox.type": "io.debezium.transforms.outbox.EventRouter",
+    "transforms.outbox.collection.field.event.id": "event_id",
+    "transforms.outbox.collection.field.event.key": "aggregate_id",
+    "transforms.outbox.collection.field.event.type": "event_type",
+    "transforms.outbox.collection.field.event.payload": "payload",
+    "transforms.outbox.route.by.field": "topic",
+    "transforms.outbox.route.topic.replacement": "${routedByValue}",
+    "transforms.outbox.collection.fields.additional.placement": "version:envelope:version,actor_user_id:envelope:actor_user_id,event_type:envelope:event_type,schema_version:envelope:schema_version,occurred_at:envelope:occurred_at,aggregate_type:envelope:aggregate_type,traceparent:header:traceparent",
+    "transforms.outbox.table.op.invalid.behavior": "filter",
+    "errors.tolerance": "none",
+    "errors.log.enable": "true",
+    "errors.log.include.messages": "true"
+  }
+}

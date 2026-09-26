@@ -14,6 +14,8 @@ import { SkuModule } from './sku/sku.module';
 import { ProductModule } from './product/product.module';
 import { StorageModule } from './integrations/storage/storage.module';
 import { MediaModule } from './media/media.module';
+import { KafkaModule } from './integrations/kafka/kafka.module';
+import { ProjectionsModule } from './projections/projections.module';
 import { TraceContextMiddleware } from './common/middleware/trace-context.middleware';
 import { ActorContextGuard } from './common/guards/actor-context.guard';
 import { ResponseEnvelopeInterceptor } from './common/interceptors/response-envelope.interceptor';
@@ -35,6 +37,8 @@ import { GlobalExceptionFilter } from './common/filters/global-exception.filter'
     ProductModule,
     StorageModule,
     MediaModule,
+    KafkaModule,
+    ProjectionsModule,
   ],
   providers: [
     {
