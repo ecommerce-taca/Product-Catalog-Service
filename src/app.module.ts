@@ -16,6 +16,8 @@ import { StorageModule } from './integrations/storage/storage.module';
 import { MediaModule } from './media/media.module';
 import { KafkaModule } from './integrations/kafka/kafka.module';
 import { ProjectionsModule } from './projections/projections.module';
+import { PublishPolicyModule } from './publish-policy/publish-policy.module';
+import { ModerationModule } from './moderation/moderation.module';
 import { TraceContextMiddleware } from './common/middleware/trace-context.middleware';
 import { ActorContextGuard } from './common/guards/actor-context.guard';
 import { ResponseEnvelopeInterceptor } from './common/interceptors/response-envelope.interceptor';
@@ -39,6 +41,8 @@ import { GlobalExceptionFilter } from './common/filters/global-exception.filter'
     MediaModule,
     KafkaModule,
     ProjectionsModule,
+    PublishPolicyModule,
+    ModerationModule,
   ],
   providers: [
     {
