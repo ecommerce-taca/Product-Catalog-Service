@@ -25,6 +25,7 @@ import { OutboxRepositoryPort } from '../../outbox/repositories/outbox.repositor
 import { VariantResolver } from '../../sku/services/variant-resolver.service';
 import { DownloadedMediaResult, MediaDownloadService } from './media-download.service';
 import { ExcelFormulaSanitizer } from '../utils/excel-formula-sanitizer.util';
+import { ExcelResultService } from './excel-result.service';
 
 const SYSTEM_ACTOR_ID = '01910000-0000-7000-8000-000000000000';
 const GLOBAL_MAX_CONCURRENT_WORKERS = 3;
@@ -120,6 +121,8 @@ export class ImportWorkerService {
     private readonly mediaDownloadService: MediaDownloadService,
     @Optional()
     private readonly variantResolver?: VariantResolver,
+    @Optional()
+    private readonly excelResultService?: ExcelResultService,
   ) {}
 
   /**
@@ -780,6 +783,18 @@ export class ImportWorkerService {
     job.error_summary = combinedErrorSummary;
     job.completed_at = new Date();
     job.locked_until = null;
+
+    if (failedSkuRowsCount > 0 && this.excelResultService) {
+      try {
+        const uploadResult = await this.excelResultService.generateAndUploadResultFile(job);
+        job.result_file_url = uploadResult.s3Key;
+      } catch (err: unknown) {
+        this.logger.error(
+          `Failed to generate/upload error result file for job ${jobId}: ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    }
+
     await job.save();
 
     this.logger.log(

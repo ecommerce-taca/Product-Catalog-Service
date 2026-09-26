@@ -15,6 +15,7 @@ import { MongoImportJobRepository } from './repositories/import-job.repository';
 import { ExcelTemplateService } from './services/excel-template.service';
 import { MediaDownloadService } from './services/media-download.service';
 import { ImportWorkerService } from './services/import-worker.service';
+import { ExcelResultService } from './services/excel-result.service';
 import { SellerImportController } from './controllers/seller-import.controller';
 
 export const IMPORT_JOB_REPOSITORY_PORT = 'IMPORT_JOB_REPOSITORY_PORT';
@@ -38,6 +39,7 @@ export const IMPORT_JOB_REPOSITORY_PORT = 'IMPORT_JOB_REPOSITORY_PORT';
     ExcelTemplateService,
     MediaDownloadService,
     ImportWorkerService,
+    ExcelResultService,
     {
       provide: IMPORT_JOB_REPOSITORY_PORT,
       useClass: MongoImportJobRepository,
@@ -53,6 +55,7 @@ export const IMPORT_JOB_REPOSITORY_PORT = 'IMPORT_JOB_REPOSITORY_PORT';
     ExcelTemplateService,
     MediaDownloadService,
     ImportWorkerService,
+    ExcelResultService,
     IMPORT_JOB_REPOSITORY_PORT,
     'ImportJobRepositoryPort',
   ],

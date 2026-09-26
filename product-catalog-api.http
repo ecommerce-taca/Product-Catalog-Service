@@ -46,6 +46,7 @@
 @productId = 01912f30-0000-7000-8000-000000000001
 @skuId = 01912f40-0000-7000-8000-000000000001
 @mediaId = 01912f50-0000-7000-8000-000000000001
+@importJobId = 01923456-789a-7bc8-9def-0123456789ab
 
 
 ### ==============================================================================
@@ -746,5 +747,46 @@ Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
 
 < ./test/fixtures/sample-import.xlsx
 --WebAppBoundary--
+
+
+### [10.11] Tra cứu tiến độ import job theo thời gian thực (AC-IM-16)
+# Mong đợi: 200 OK kèm body tiến độ { job_id, status, total_rows, processed_rows, success_count, error_count }
+GET {{baseUrl}}/seller/products/import/jobs/{{importJobId}}
+Accept: application/json
+x-user-id: {{sellerId}}
+x-user-roles: {{sellerRoles}}
+x-user-shop-scope: {{sellerShopScope}}
+
+### [10.12] Tải file kết quả lỗi (Direct binary stream .xlsx - AC-IM-17)
+# Mong đợi: 200 OK kèm binary Excel .xlsx (Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet)
+GET {{baseUrl}}/seller/products/import/jobs/{{importJobId}}/result
+Accept: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+x-user-id: {{sellerId}}
+x-user-roles: {{sellerRoles}}
+x-user-shop-scope: {{sellerShopScope}}
+
+### [10.13] Lấy presigned URL tải kết quả lỗi (JSON Content Negotiation)
+# Mong đợi: 200 OK kèm JSON chứa presigned download URL thời hạn 30 phút
+GET {{baseUrl}}/seller/products/import/jobs/{{importJobId}}/result
+Accept: application/json
+x-user-id: {{sellerId}}
+x-user-roles: {{sellerRoles}}
+x-user-shop-scope: {{sellerShopScope}}
+
+### [10.14] Chống tấn công IDOR: Seller khác tra cứu job của shop khác (AC-IM-18)
+# Mong đợi: 404 Not Found (PRODUCT_NOT_FOUND) - Tuyệt đối không leak thông tin hoặc sự tồn tại của shop khác
+GET {{baseUrl}}/seller/products/import/jobs/{{importJobId}}
+Accept: application/json
+x-user-id: {{attackerId}}
+x-user-roles: {{attackerRoles}}
+x-user-shop-scope: {{attackerShopScope}}
+
+### [10.15] Tải kết quả khi job chưa hoàn tất hoặc không có lỗi (Edge Case)
+# Mong đợi: 400 Bad Request (PRODUCT_IMPORT_JOB_NOT_FINISHED hoặc PRODUCT_IMPORT_NO_ERRORS)
+GET {{baseUrl}}/seller/products/import/jobs/{{importJobId}}/result
+Accept: application/json
+x-user-id: {{sellerId}}
+x-user-roles: {{sellerRoles}}
+x-user-shop-scope: {{sellerShopScope}}
 
 

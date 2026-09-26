@@ -1,0 +1,246 @@
+import { Inject, Injectable, Logger } from '@nestjs/common';
+import { GetObjectCommand } from '@aws-sdk/client-s3';
+import * as ExcelJS from 'exceljs';
+import { Readable } from 'stream';
+
+import { ImportJobDocument } from '../../database/schemas/import-job.schema';
+import { S3StorageService } from '../../integrations/storage/s3-storage.service';
+import { ImportJobRepositoryPort } from '../repositories/import-job.repository.interface';
+import { ExcelFormulaSanitizer } from '../utils/excel-formula-sanitizer.util';
+
+export interface PresignedResultFile {
+  downloadUrl: string;
+  s3Key: string;
+  expiresAt: Date;
+}
+
+@Injectable()
+export class ExcelResultService {
+  private readonly logger = new Logger(ExcelResultService.name);
+
+  constructor(
+    private readonly storageService: S3StorageService,
+    @Inject('ImportJobRepositoryPort')
+    private readonly importJobRepo: ImportJobRepositoryPort,
+  ) {}
+
+  /**
+   * Generates an Excel buffer containing original rows annotated with error status
+   * and error reasons, or a fallback error summary workbook if the original file is unavailable.
+   * Applies ExcelFormulaSanitizer (CWE-1236, Lesson L-07) to 100% of text cells.
+   */
+  async generateResultBuffer(job: ImportJobDocument): Promise<Buffer> {
+    if (job.file_url) {
+      try {
+        const originalBuffer = await this.downloadOriginalFile(job.file_url);
+        if (originalBuffer) {
+          return await this.generateAnnotatedOriginalBuffer(originalBuffer, job);
+        }
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        this.logger.warn(
+          `Could not process original Excel file for job ${job._id}: ${msg}. Falling back to clean summary sheet.`,
+        );
+      }
+    }
+
+    return this.generateFallbackBuffer(job);
+  }
+
+  /**
+   * Generates the result Excel buffer, uploads it to S3, updates job.result_file_url,
+   * and returns presigned download URL valid for 30 minutes (1800s).
+   */
+  async generateAndUploadResultFile(job: ImportJobDocument): Promise<PresignedResultFile> {
+    const buffer = await this.generateResultBuffer(job);
+    const s3Key = `imports/shop-${job.shop_id}/${job._id}-errors.xlsx`;
+
+    await this.storageService.uploadBuffer(
+      s3Key,
+      buffer,
+      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    );
+
+    const presigned = await this.storageService.generatePresignedDownloadUrl(s3Key, 1800);
+
+    job.result_file_url = s3Key;
+    if (typeof job.save === 'function') {
+      await job.save();
+    } else {
+      await this.importJobRepo.update({ _id: job._id }, { result_file_url: s3Key });
+    }
+
+    return {
+      downloadUrl: presigned.downloadUrl,
+      s3Key,
+      expiresAt: presigned.expiresAt,
+    };
+  }
+
+  private async downloadOriginalFile(fileUrl: string): Promise<Buffer | null> {
+    try {
+      const cleanKey = fileUrl.replace(/^\//, '');
+      const command = new GetObjectCommand({
+        Bucket: this.storageService.bucket,
+        Key: cleanKey,
+      });
+      const response = await this.storageService.s3Client.send(command);
+      const stream = response.Body as Readable;
+
+      return new Promise<Buffer>((resolve, reject) => {
+        const chunks: Buffer[] = [];
+        stream.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
+        stream.on('error', (err) => reject(err));
+        stream.on('end', () => resolve(Buffer.concat(chunks)));
+      });
+    } catch (err: unknown) {
+      this.logger.warn(
+        `Failed to download original file from S3: ${err instanceof Error ? err.message : String(err)}`,
+      );
+      return null;
+    }
+  }
+
+  private async generateAnnotatedOriginalBuffer(
+    originalBuffer: Buffer,
+    job: ImportJobDocument,
+  ): Promise<Buffer> {
+    const workbook = new ExcelJS.Workbook();
+    await workbook.xlsx.load(originalBuffer as any);
+
+    const worksheet = workbook.getWorksheet('Sản phẩm & Biến thể') || workbook.getWorksheet(1);
+    if (!worksheet) {
+      return this.generateFallbackBuffer(job);
+    }
+
+    const headerRow = worksheet.getRow(1);
+    let lastCol = headerRow.actualCellCount || headerRow.cellCount;
+    if (lastCol <= 0) {
+      lastCol = 10;
+    }
+
+    const statusCol = lastCol + 1;
+    const errorCol = lastCol + 2;
+
+    const statusHeaderCell = headerRow.getCell(statusCol);
+    statusHeaderCell.value = 'Trạng thái xử lý (Import Status)';
+    statusHeaderCell.font = { bold: true };
+    statusHeaderCell.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FFFFD8A8' }, // light orange
+    };
+
+    const errorHeaderCell = headerRow.getCell(errorCol);
+    errorHeaderCell.value = 'Lý do lỗi (Error Reason)';
+    errorHeaderCell.font = { bold: true };
+    errorHeaderCell.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FFFFC7CE' }, // light red
+    };
+    headerRow.commit();
+
+    // Group errors by row_index
+    const errorMap = new Map<number, string[]>();
+    if (job.error_summary && job.error_summary.length > 0) {
+      for (const err of job.error_summary) {
+        const list = errorMap.get(err.row_index) || [];
+        list.push(err.error_message);
+        errorMap.set(err.row_index, list);
+      }
+    }
+
+    // Traverse rows starting from row 2
+    for (let r = 2; r <= worksheet.rowCount; r++) {
+      const row = worksheet.getRow(r);
+      if (!row.hasValues) continue;
+
+      const rowErrors = errorMap.get(r);
+      const statusCell = row.getCell(statusCol);
+      const errorCell = row.getCell(errorCol);
+
+      if (rowErrors && rowErrors.length > 0) {
+        statusCell.value = 'THẤT BẠI (FAILED)';
+        errorCell.value = ExcelFormulaSanitizer.sanitize(rowErrors.join('; '));
+
+        const lightRedFill: ExcelJS.Fill = {
+          type: 'pattern',
+          pattern: 'solid',
+          fgColor: { argb: 'FFFFC7CE' },
+        };
+        statusCell.fill = lightRedFill;
+        errorCell.fill = lightRedFill;
+        statusCell.font = { color: { argb: 'FF9C0006' } };
+        errorCell.font = { color: { argb: 'FF9C0006' } };
+      } else {
+        statusCell.value = 'THÀNH CÔNG (SUCCESS)';
+        errorCell.value = 'Đã tạo DRAFT';
+      }
+      row.commit();
+    }
+
+    // Sanitize 100% of cells against Formula Injection (CWE-1236 / L-07)
+    worksheet.eachRow((row, rowNumber) => {
+      if (rowNumber === 1) return;
+      row.eachCell((cell) => {
+        if (cell.value !== null && cell.value !== undefined) {
+          if (typeof cell.value === 'string') {
+            cell.value = ExcelFormulaSanitizer.sanitize(cell.value);
+          } else if (typeof cell.value === 'object' && 'text' in cell.value) {
+            (cell.value as any).text = ExcelFormulaSanitizer.sanitize((cell.value as any).text);
+          }
+        }
+      });
+      row.commit();
+    });
+
+    const buffer = await workbook.xlsx.writeBuffer();
+    return Buffer.from(buffer);
+  }
+
+  private async generateFallbackBuffer(job: ImportJobDocument): Promise<Buffer> {
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('Báo cáo kết quả');
+
+    sheet.columns = [
+      { header: 'Dòng', key: 'row_index', width: 10 },
+      { header: 'Mã tham chiếu (product_ref_id)', key: 'product_ref_id', width: 28 },
+      { header: 'Mã SKU (seller_sku)', key: 'seller_sku', width: 24 },
+      { header: 'Mã lỗi (error_code)', key: 'error_code', width: 30 },
+      { header: 'Chi tiết lỗi (error_message)', key: 'error_message', width: 50 },
+    ];
+
+    const headerRow = sheet.getRow(1);
+    headerRow.font = { bold: true };
+    headerRow.fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FFFFC7CE' },
+    };
+    headerRow.commit();
+
+    if (job.error_summary && job.error_summary.length > 0) {
+      for (const err of job.error_summary) {
+        const addedRow = sheet.addRow({
+          row_index: err.row_index,
+          product_ref_id: ExcelFormulaSanitizer.sanitize(err.product_ref_id),
+          seller_sku: ExcelFormulaSanitizer.sanitize(err.seller_sku || ''),
+          error_code: ExcelFormulaSanitizer.sanitize(err.error_code),
+          error_message: ExcelFormulaSanitizer.sanitize(err.error_message),
+        });
+        addedRow.eachCell((cell) => {
+          cell.fill = {
+            type: 'pattern',
+            pattern: 'solid',
+            fgColor: { argb: 'FFFFE2DD' },
+          };
+        });
+        addedRow.commit();
+      }
+    }
+
+    const buffer = await workbook.xlsx.writeBuffer();
+    return Buffer.from(buffer);
+  }
+}

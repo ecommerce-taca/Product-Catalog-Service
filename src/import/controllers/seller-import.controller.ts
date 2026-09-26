@@ -8,14 +8,18 @@ import {
   HttpStatus,
   Inject,
   Logger,
+  NotFoundException,
+  Optional,
+  Param,
   Post,
   Query,
+  Req,
   Res,
   UploadedFile,
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { Response } from 'express';
+import { Request, Response } from 'express';
 import { v7 as uuidv7 } from 'uuid';
 
 import { Roles } from '../../common/decorators/roles.decorator';
@@ -34,10 +38,16 @@ import { S3StorageService } from '../../integrations/storage/s3-storage.service'
 import { ImportJobRepositoryPort } from '../repositories/import-job.repository.interface';
 import { ExcelTemplateService } from '../services/excel-template.service';
 import { ImportWorkerService } from '../services/import-worker.service';
+import { ExcelResultService } from '../services/excel-result.service';
 import { ImportTemplateQueryDto } from '../dto/import-template-query.dto';
-import { ImportJobCreatedResponseDto } from '../dto/import-job-response.dto';
+import {
+  ImportJobCreatedResponseDto,
+  ImportJobResponseDto,
+  ImportJobResultResponseDto,
+} from '../dto/import-job-response.dto';
 
 const MAX_FILE_SIZE_BYTES = 2 * 1024 * 1024; // 2MB
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export interface UploadedFilePayload {
   fieldname?: string;
@@ -61,6 +71,8 @@ export class SellerImportController {
     private readonly importJobRepo: ImportJobRepositoryPort,
     private readonly importWorkerService: ImportWorkerService,
     private readonly storageService: S3StorageService,
+    @Optional()
+    private readonly excelResultService?: ExcelResultService,
   ) {}
 
   /**
@@ -223,5 +235,164 @@ export class SellerImportController {
       created_at: job.created_at || new Date(),
       message: 'Tác vụ nhập sản phẩm đã được tiếp nhận và đang xếp hàng xử lý.',
     };
+  }
+
+  /**
+   * Tracks real-time progress of an import job (FR-IM-06, AC-IM-16, AC-IM-18).
+   * Enforces Zero-Trust IDOR check: returns 404 PRODUCT_NOT_FOUND if job does not exist
+   * or does not belong to the calling shop.
+   */
+  @Get('jobs/:jobId')
+  async getJobProgress(
+    @Param('jobId') jobId: string,
+    @ShopScope() shopScope: string,
+    @Actor() actor: ActorContext,
+  ): Promise<ImportJobResponseDto> {
+    const actorShopScope = shopScope || actor?.shopScope;
+    if (!actorShopScope) {
+      throw new ForbiddenException({
+        code: 'PRODUCT_FORBIDDEN',
+        message: 'Bạn không có quyền thao tác. Thiếu thông tin gian hàng (shop scope).',
+      });
+    }
+
+    if (!UUID_REGEX.test(jobId)) {
+      throw new BadRequestException({
+        code: 'PRODUCT_INVALID_INPUT',
+        message: 'Mã tác vụ jobId không đúng định dạng UUID.',
+      });
+    }
+
+    const job = await this.importJobRepo.findById(jobId);
+    if (!job || job.shop_id !== actorShopScope) {
+      throw new NotFoundException({
+        code: 'PRODUCT_NOT_FOUND',
+        message: 'Không tìm thấy tác vụ.',
+      });
+    }
+
+    return ImportJobResponseDto.fromDocument(job);
+  }
+
+  /**
+   * Downloads error result report for an import job (FR-IM-06, AC-IM-17, AC-IM-18).
+   * Zero-Trust IDOR check -> 404 NOT_FOUND.
+   * Job must be COMPLETED or FAILED, and must have error_count > 0.
+   * Content negotiation:
+   * - If Accept header contains 'application/json': returns JSON with presigned download URL.
+   * - Otherwise: streams binary .xlsx file directly as attachment.
+   */
+  @Get('jobs/:jobId/result')
+  @SkipEnvelope()
+  async getJobResult(
+    @Param('jobId') jobId: string,
+    @ShopScope() shopScope: string,
+    @Actor() actor: ActorContext,
+    @Req() req: Request,
+    @Res() res: Response,
+  ): Promise<void> {
+    const actorShopScope = shopScope || actor?.shopScope;
+    if (!actorShopScope) {
+      throw new ForbiddenException({
+        code: 'PRODUCT_FORBIDDEN',
+        message: 'Bạn không có quyền thao tác. Thiếu thông tin gian hàng (shop scope).',
+      });
+    }
+
+    if (!UUID_REGEX.test(jobId)) {
+      throw new BadRequestException({
+        code: 'PRODUCT_INVALID_INPUT',
+        message: 'Mã tác vụ jobId không đúng định dạng UUID.',
+      });
+    }
+
+    const job = await this.importJobRepo.findById(jobId);
+    if (!job || job.shop_id !== actorShopScope) {
+      throw new NotFoundException({
+        code: 'PRODUCT_NOT_FOUND',
+        message: 'Không tìm thấy tác vụ.',
+      });
+    }
+
+    if (job.status !== ImportJobStatus.COMPLETED && job.status !== ImportJobStatus.FAILED) {
+      throw new BadRequestException({
+        code: 'PRODUCT_IMPORT_JOB_NOT_FINISHED',
+        message: 'Tác vụ đang được xử lý, chưa thể xuất báo cáo kết quả.',
+      });
+    }
+
+    if (job.error_count === 0 || !job.error_summary || job.error_summary.length === 0) {
+      throw new BadRequestException({
+        code: 'PRODUCT_IMPORT_NO_ERRORS',
+        message: 'Tác vụ đã hoàn tất thành công 100%, không có dòng lỗi nào cần xuất báo cáo.',
+      });
+    }
+
+    const acceptHeader = (req?.headers?.accept || '').toLowerCase();
+    const wantsJson = acceptHeader.includes('application/json');
+
+    if (wantsJson) {
+      let downloadUrl: string;
+      let expiresAt: Date | string;
+
+      if (job.result_file_url) {
+        const presigned = await this.storageService.generatePresignedDownloadUrl(
+          job.result_file_url,
+          1800,
+        );
+        downloadUrl = presigned.downloadUrl;
+        expiresAt = presigned.expiresAt;
+      } else if (this.excelResultService) {
+        const uploadResult = await this.excelResultService.generateAndUploadResultFile(job);
+        downloadUrl = uploadResult.downloadUrl;
+        expiresAt = uploadResult.expiresAt;
+      } else {
+        const fallbackPresigned = await this.storageService.generatePresignedDownloadUrl(
+          `imports/shop-${job.shop_id}/${job._id}-errors.xlsx`,
+          1800,
+        );
+        downloadUrl = fallbackPresigned.downloadUrl;
+        expiresAt = fallbackPresigned.expiresAt;
+      }
+
+      const resultDto: ImportJobResultResponseDto = {
+        job_id: job._id,
+        result_file_url: downloadUrl,
+        total_rows: job.total_rows ?? 0,
+        success_count: job.success_count ?? 0,
+        error_count: job.error_count ?? 0,
+        expires_at: expiresAt,
+      };
+
+      res.status(HttpStatus.OK).json({
+        job_id: resultDto.job_id,
+        result_file_url: resultDto.result_file_url,
+        total_rows: resultDto.total_rows,
+        success_count: resultDto.success_count,
+        error_count: resultDto.error_count,
+        expires_at: resultDto.expires_at,
+        data: resultDto,
+      });
+      return;
+    }
+
+    // Direct binary download (.xlsx)
+    if (!this.excelResultService) {
+      throw new BadRequestException({
+        code: 'PRODUCT_IMPORT_SERVICE_UNAVAILABLE',
+        message: 'Dịch vụ xuất file Excel chưa sẵn sàng.',
+      });
+    }
+
+    const buffer = await this.excelResultService.generateResultBuffer(job);
+    const filename = `import_errors_${jobId}.xlsx`;
+
+    res.set({
+      'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      'Content-Disposition': `attachment; filename="${filename}"`,
+      'Content-Length': buffer.length.toString(),
+    });
+
+    res.status(HttpStatus.OK).send(buffer);
   }
 }
