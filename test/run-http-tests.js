@@ -350,11 +350,11 @@ async function run() {
   console.log(`[10.1] GET /seller/products/import/template (default) => ${res.status}`, `Content-Type: ${res.headers?.['content-type']}`);
 
   // Test 10.2: Bulk Import Template (With valid category_id)
-  res = await request('GET', `${BASE_PATH}/seller/products/import/template?category_id=${categoryId}`, {
+  res = await request('GET', `${BASE_PATH}/seller/products/import/template?category_id=${subCatId}`, {
     ...sellerHeaders,
     'Accept': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   });
-  console.log(`[10.2] GET /seller/products/import/template?category_id=${categoryId} => ${res.status}`, `Content-Type: ${res.headers?.['content-type']}`);
+  console.log(`[10.2] GET /seller/products/import/template?category_id=${subCatId} => ${res.status}`, `Content-Type: ${res.headers?.['content-type']}`);
 
   // Test 10.3: Bulk Import Template (Non-existent category_id)
   res = await request('GET', `${BASE_PATH}/seller/products/import/template?category_id=01912f20-9999-7000-8000-000000009999`, sellerHeaders);
