@@ -633,3 +633,46 @@ x-user-shop-scope: {{suspendedShopScope}}
 {
   "version": 1
 }
+
+
+### ==============================================================================
+### PHẦN 10: NHẬP SẢN PHẨM HÀNG LOẠT (BULK PRODUCT IMPORT - SELLER)
+### ==============================================================================
+
+### [10.1] Tải template mẫu mặc định (không truyền category_id)
+# Mong đợi: 200 OK kèm binary Excel .xlsx (Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet)
+GET {{baseUrl}}/seller/products/import/template
+Accept: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, application/json
+x-user-id: {{sellerId}}
+x-user-roles: {{sellerRoles}}
+x-user-shop-scope: {{sellerShopScope}}
+
+### [10.2] Tải template mẫu theo category_id hợp lệ (có dropdown validation cho ENUM)
+# Mong đợi: 200 OK kèm binary Excel .xlsx chứa các cột thuộc tính động
+GET {{baseUrl}}/seller/products/import/template?category_id={{categoryId}}
+Accept: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, application/json
+x-user-id: {{sellerId}}
+x-user-roles: {{sellerRoles}}
+x-user-shop-scope: {{sellerShopScope}}
+
+### [10.3] Tải template với category_id không tồn tại trong hệ thống
+# Mong đợi: 400 Bad Request (PRODUCT_CATEGORY_INVALID)
+GET {{baseUrl}}/seller/products/import/template?category_id=01912f20-9999-7000-8000-000000009999
+Accept: application/json
+x-user-id: {{sellerId}}
+x-user-roles: {{sellerRoles}}
+x-user-shop-scope: {{sellerShopScope}}
+
+### [10.4] Shop bị đình chỉ (SUSPENDED): Tải template mẫu nạp sản phẩm
+# Mong đợi: 403 Forbidden (PRODUCT_SHOP_SUSPENDED)
+GET {{baseUrl}}/seller/products/import/template
+Accept: application/json
+x-user-id: {{suspendedSellerId}}
+x-user-roles: {{sellerRoles}}
+x-user-shop-scope: {{suspendedShopScope}}
+
+### [10.5] Khách không đăng nhập: Tải template mẫu nạp sản phẩm
+# Mong đợi: 401 Unauthorized (UNAUTHORIZED)
+GET {{baseUrl}}/seller/products/import/template
+Accept: application/json
+

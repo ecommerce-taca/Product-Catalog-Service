@@ -2,7 +2,12 @@ import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { ImportJob, ImportJobSchema } from '../database/schemas/import-job.schema';
 import { DatabaseModule } from '../database/database.module';
+import { CategoryModule } from '../category/category.module';
+import { AttributeModule } from '../attribute/attribute.module';
+import { ProjectionsModule } from '../projections/projections.module';
 import { MongoImportJobRepository } from './repositories/import-job.repository';
+import { ExcelTemplateService } from './services/excel-template.service';
+import { SellerImportController } from './controllers/seller-import.controller';
 
 export const IMPORT_JOB_REPOSITORY_PORT = 'IMPORT_JOB_REPOSITORY_PORT';
 
@@ -10,9 +15,14 @@ export const IMPORT_JOB_REPOSITORY_PORT = 'IMPORT_JOB_REPOSITORY_PORT';
   imports: [
     MongooseModule.forFeature([{ name: ImportJob.name, schema: ImportJobSchema }]),
     DatabaseModule,
+    CategoryModule,
+    AttributeModule,
+    ProjectionsModule,
   ],
+  controllers: [SellerImportController],
   providers: [
     MongoImportJobRepository,
+    ExcelTemplateService,
     {
       provide: IMPORT_JOB_REPOSITORY_PORT,
       useClass: MongoImportJobRepository,
@@ -25,6 +35,7 @@ export const IMPORT_JOB_REPOSITORY_PORT = 'IMPORT_JOB_REPOSITORY_PORT';
   exports: [
     MongooseModule,
     MongoImportJobRepository,
+    ExcelTemplateService,
     IMPORT_JOB_REPOSITORY_PORT,
     'ImportJobRepositoryPort',
   ],

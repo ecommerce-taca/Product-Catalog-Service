@@ -342,7 +342,37 @@ async function run() {
   });
   console.log(`[9.5] Security Suspended Shop Block => ${res.status}`, res.data?.error?.code);
 
+  // Test 10.1: Bulk Import Template (Default / No category)
+  res = await request('GET', `${BASE_PATH}/seller/products/import/template`, {
+    ...sellerHeaders,
+    'Accept': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  });
+  console.log(`[10.1] GET /seller/products/import/template (default) => ${res.status}`, `Content-Type: ${res.headers?.['content-type']}`);
+
+  // Test 10.2: Bulk Import Template (With valid category_id)
+  res = await request('GET', `${BASE_PATH}/seller/products/import/template?category_id=${categoryId}`, {
+    ...sellerHeaders,
+    'Accept': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  });
+  console.log(`[10.2] GET /seller/products/import/template?category_id=${categoryId} => ${res.status}`, `Content-Type: ${res.headers?.['content-type']}`);
+
+  // Test 10.3: Bulk Import Template (Non-existent category_id)
+  res = await request('GET', `${BASE_PATH}/seller/products/import/template?category_id=01912f20-9999-7000-8000-000000009999`, sellerHeaders);
+  console.log(`[10.3] GET /seller/products/import/template (invalid category) => ${res.status}`, res.data?.error?.code);
+
+  // Test 10.4: Bulk Import Template (Suspended Shop Block)
+  res = await request('GET', `${BASE_PATH}/seller/products/import/template`, {
+    ...sellerHeaders,
+    'x-user-shop-scope': '01912f20-8888-7000-8000-000000008888',
+  });
+  console.log(`[10.4] GET /seller/products/import/template (suspended shop) => ${res.status}`, res.data?.error?.code);
+
+  // Test 10.5: Bulk Import Template (Unauthorized - no auth)
+  res = await request('GET', `${BASE_PATH}/seller/products/import/template`);
+  console.log(`[10.5] GET /seller/products/import/template (unauthorized) => ${res.status}`, res.data?.error?.code);
+
   console.log('\n=== ALL HTTP RUNNER TESTS EXECUTED SUCCESSFULLY ===');
 }
 
 run().catch((e) => console.error('FATAL ERROR:', e));
+
