@@ -28,6 +28,15 @@ export class ShopSnapshotRepository
     return query.exec();
   }
 
+  async findByShopIds(shopIds: string[], session?: ClientSession): Promise<ShopSnapshotDocument[]> {
+    if (!shopIds || shopIds.length === 0) return [];
+    const query = this.model.find({ shop_id: { $in: shopIds } });
+    if (session) {
+      query.session(session);
+    }
+    return query.exec();
+  }
+
   async upsertSnapshot(
     snapshot: Partial<ShopSnapshot>,
     session?: ClientSession,
