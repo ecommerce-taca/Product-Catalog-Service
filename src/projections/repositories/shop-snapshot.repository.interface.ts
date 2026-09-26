@@ -6,6 +6,7 @@ export const SHOP_SNAPSHOT_REPOSITORY_PORT = 'ShopSnapshotRepositoryPort';
 
 export interface ShopSnapshotRepositoryPort extends BaseRepository<ShopSnapshotDocument> {
   findByShopId(shopId: string, session?: ClientSession): Promise<ShopSnapshotDocument | null>;
+  findByShopIds?(shopIds: string[], session?: ClientSession): Promise<ShopSnapshotDocument[]>;
   upsertSnapshot(
     snapshot: Partial<ShopSnapshot>,
     session?: ClientSession,

@@ -1,11 +1,16 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { HeadObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { HeadObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import * as crypto from 'crypto';
 import { StorageConfig } from '../../config/storage.config';
 
 export interface PresignedUploadResult {
   uploadUrl: string;
+  expiresAt: Date;
+}
+
+export interface PresignedDownloadResult {
+  downloadUrl: string;
   expiresAt: Date;
 }
 
@@ -127,6 +132,94 @@ export class S3StorageService {
       uploadUrl,
       expiresAt,
     };
+  }
+
+  /**
+   * Generates an AWS SigV4 Presigned GET URL for downloading objects directly from S3/MinIO.
+   * TTL defaults to 1800s (30 minutes).
+   */
+  async generatePresignedDownloadUrl(
+    objectKey: string,
+    ttlSeconds = 1800,
+  ): Promise<PresignedDownloadResult> {
+    const now = new Date();
+    const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, '');
+    const dateStamp = amzDate.substring(0, 8);
+    const expiresAt = new Date(now.getTime() + ttlSeconds * 1000);
+
+    const cleanKey = objectKey.replace(/^\//, '');
+    const credential = `${this.accessKeyId}/${dateStamp}/${this.region}/s3/aws4_request`;
+
+    let endpointUrl = this.endpoint || 'https://s3.amazonaws.com';
+    if (!endpointUrl.startsWith('http://') && !endpointUrl.startsWith('https://')) {
+      endpointUrl = `https://${endpointUrl}`;
+    }
+    const urlObj = new URL(endpointUrl);
+    const host = urlObj.host;
+
+    let canonicalUri: string;
+    if (this.forcePathStyle) {
+      canonicalUri = `/${this.bucket}/${cleanKey.split('/').map(encodeURIComponent).join('/')}`;
+    } else {
+      canonicalUri = `/${cleanKey.split('/').map(encodeURIComponent).join('/')}`;
+    }
+
+    const queryParams: Record<string, string> = {
+      'X-Amz-Algorithm': 'AWS4-HMAC-SHA256',
+      'X-Amz-Credential': credential,
+      'X-Amz-Date': amzDate,
+      'X-Amz-Expires': ttlSeconds.toString(),
+      'X-Amz-SignedHeaders': 'host',
+    };
+
+    const canonicalQueryString = Object.keys(queryParams)
+      .sort()
+      .map((k) => `${encodeURIComponent(k)}=${encodeURIComponent(queryParams[k])}`)
+      .join('&');
+
+    const canonicalHeaders = `host:${host}\n`;
+    const signedHeaders = 'host';
+    const payloadHash = 'UNSIGNED-PAYLOAD';
+
+    const canonicalRequest = [
+      'GET',
+      canonicalUri,
+      canonicalQueryString,
+      canonicalHeaders,
+      signedHeaders,
+      payloadHash,
+    ].join('\n');
+
+    const stringToSign = [
+      'AWS4-HMAC-SHA256',
+      amzDate,
+      `${dateStamp}/${this.region}/s3/aws4_request`,
+      crypto.createHash('sha256').update(canonicalRequest).digest('hex'),
+    ].join('\n');
+
+    const signingKey = this.getSignatureKey(this.secretAccessKey, dateStamp, this.region, 's3');
+    const signature = crypto.createHmac('sha256', signingKey).update(stringToSign).digest('hex');
+
+    const downloadUrl = `${urlObj.origin}${canonicalUri}?${canonicalQueryString}&X-Amz-Signature=${signature}`;
+
+    return {
+      downloadUrl,
+      expiresAt,
+    };
+  }
+
+  /**
+   * Uploads an in-memory buffer directly to S3/MinIO bucket.
+   */
+  async uploadBuffer(objectKey: string, buffer: Buffer, contentType: string): Promise<void> {
+    const cleanKey = objectKey.replace(/^\//, '');
+    const command = new PutObjectCommand({
+      Bucket: this.bucket,
+      Key: cleanKey,
+      Body: buffer,
+      ContentType: contentType,
+    });
+    await this.s3Client.send(command);
   }
 
   /**

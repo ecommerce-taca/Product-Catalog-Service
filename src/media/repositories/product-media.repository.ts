@@ -37,6 +37,23 @@ export class ProductMediaRepository
     return query.exec();
   }
 
+  async findByProductIds(
+    productIds: string[],
+    session?: ClientSession,
+  ): Promise<ProductMediaDocument[]> {
+    if (!productIds || productIds.length === 0) return [];
+    const query = this.model
+      .find({
+        product_id: { $in: productIds },
+        status: { $ne: MediaStatus.DELETED },
+      })
+      .sort({ sort_order: 1, created_at: 1 });
+    if (session) {
+      query.session(session);
+    }
+    return query.exec();
+  }
+
   async findActiveByProductId(
     productId: string,
     session?: ClientSession,

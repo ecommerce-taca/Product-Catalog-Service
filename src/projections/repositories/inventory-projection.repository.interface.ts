@@ -13,6 +13,10 @@ export interface InventoryProjectionRepositoryPort extends BaseRepository<Invent
     productId: string,
     session?: ClientSession,
   ): Promise<InventoryProjectionDocument[]>;
+  findByProductIds?(
+    productIds: string[],
+    session?: ClientSession,
+  ): Promise<InventoryProjectionDocument[]>;
   upsertProjection(
     projection: Partial<InventoryProjection>,
     session?: ClientSession,

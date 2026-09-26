@@ -156,4 +156,54 @@ describe('S3StorageService', () => {
       expect(url).toBe('https://cdn.example.com/products/shop-1/product-1/media-1.webp');
     });
   });
+
+  describe('generatePresignedDownloadUrl', () => {
+    it('should generate valid AWS SigV4 presigned GET URL with 1800s default TTL', async () => {
+      const objectKey = 'exports/products-shop-1-12345.xlsx';
+      const result = await service.generatePresignedDownloadUrl(objectKey);
+
+      expect(result).toBeDefined();
+      expect(result.downloadUrl).toBeDefined();
+      expect(result.expiresAt).toBeInstanceOf(Date);
+
+      const parsedUrl = new URL(result.downloadUrl);
+      expect(parsedUrl.pathname).toContain('/test-bucket/exports/products-shop-1-12345.xlsx');
+      expect(parsedUrl.searchParams.get('X-Amz-Algorithm')).toBe('AWS4-HMAC-SHA256');
+      expect(parsedUrl.searchParams.get('X-Amz-Credential')).toContain('test-key-id');
+      expect(parsedUrl.searchParams.get('X-Amz-Expires')).toBe('1800');
+      expect(parsedUrl.searchParams.get('X-Amz-Signature')).toBeDefined();
+      expect(parsedUrl.searchParams.get('X-Amz-Signature')?.length).toBe(64);
+    });
+
+    it('should support custom ttlSeconds', async () => {
+      const objectKey = 'exports/products-shop-1-12345.csv';
+      const before = Date.now();
+      const result = await service.generatePresignedDownloadUrl(objectKey, 900);
+      const after = Date.now();
+
+      const expectedMin = before + 900 * 1000;
+      const expectedMax = after + 900 * 1000;
+      expect(result.expiresAt.getTime()).toBeGreaterThanOrEqual(expectedMin);
+      expect(result.expiresAt.getTime()).toBeLessThanOrEqual(expectedMax);
+    });
+  });
+
+  describe('uploadBuffer', () => {
+    it('should send PutObjectCommand with correct parameters', async () => {
+      mockSend.mockResolvedValueOnce({});
+      const buffer = Buffer.from('test content');
+      await service.uploadBuffer('exports/test.csv', buffer, 'text/csv');
+
+      expect(mockSend).toHaveBeenCalledWith(
+        expect.objectContaining({
+          input: expect.objectContaining({
+            Bucket: 'test-bucket',
+            Key: 'exports/test.csv',
+            Body: buffer,
+            ContentType: 'text/csv',
+          }),
+        }),
+      );
+    });
+  });
 });

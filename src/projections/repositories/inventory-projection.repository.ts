@@ -42,6 +42,18 @@ export class InventoryProjectionRepository
     return query.exec();
   }
 
+  async findByProductIds(
+    productIds: string[],
+    session?: ClientSession,
+  ): Promise<InventoryProjectionDocument[]> {
+    if (!productIds || productIds.length === 0) return [];
+    const query = this.model.find({ product_id: { $in: productIds } });
+    if (session) {
+      query.session(session);
+    }
+    return query.exec();
+  }
+
   async upsertProjection(
     projection: Partial<InventoryProjection>,
     session?: ClientSession,
