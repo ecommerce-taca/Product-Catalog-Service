@@ -6,8 +6,11 @@ import { ModerationService } from '../services/moderation.service';
 import { BlockProductDto } from '../dto/block-product.dto';
 import { UnblockProductDto } from '../dto/unblock-product.dto';
 import { QueryAuditsDto } from '../dto/query-audits.dto';
+import { QueryAdminProductsDto } from '../dto/query-admin-products.dto';
 import {
+  AdminProductDetailDto,
   BlockProductResponseDto,
+  PaginatedAdminProductsResponseDto,
   PaginatedAuditsResponseDto,
   UnblockProductResponseDto,
 } from '../dto/moderation-response.dto';
@@ -16,6 +19,20 @@ import {
 @Roles('CATALOG_ADMIN', 'SUPER_ADMIN')
 export class AdminModerationController {
   constructor(private readonly moderationService: ModerationService) {}
+
+  @Get('products')
+  async getAdminProducts(
+    @Query() query: QueryAdminProductsDto,
+  ): Promise<PaginatedAdminProductsResponseDto> {
+    return this.moderationService.getAdminProducts(query);
+  }
+
+  @Get('products/:productId')
+  async getAdminProductDetail(
+    @Param('productId') productId: string,
+  ): Promise<AdminProductDetailDto> {
+    return this.moderationService.getAdminProductDetail(productId);
+  }
 
   @Post('products/:productId/block')
   @HttpCode(HttpStatus.OK)

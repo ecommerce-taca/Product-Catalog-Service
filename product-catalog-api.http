@@ -12,25 +12,33 @@
 
 # Actor Mock Headers (Mô phỏng Authentication Context từ API Gateway)
 # Seller 1 (Chính chủ)
-@sellerId = usr-seller-01912f10-0001
-@sellerShopScope = shop-01912f20-0001-7000-8000-000000000001
+@sellerId = 01912f10-0001-7000-8000-000000000001
+@sellerShopScope = 01912f20-0001-7000-8000-000000000001
 @sellerRoles = SELLER
 
 # Seller Staff
-@staffId = usr-staff-01912f10-0002
+@staffId = 01912f10-0002-7000-8000-000000000002
 @staffRoles = SELLER_STAFF
 
 # Attacker / Seller 2 (Dùng để kiểm thử tấn công IDOR)
-@attackerId = usr-attacker-01912f10-9999
-@attackerShopScope = shop-01912f20-9999-7000-8000-000000009999
+@attackerId = 01912f10-9999-7000-8000-000000009999
+@attackerShopScope = 01912f20-9999-7000-8000-000000009999
 @attackerRoles = SELLER
 
 # Admin & Super Admin
-@adminId = usr-admin-01912f10-0003
+@adminId = 01912f10-0003-7000-8000-000000000003
 @adminRoles = CATALOG_ADMIN
 
-@superAdminId = usr-superadmin-01912f10-0004
+@superAdminId = 01912f10-0004-7000-8000-000000000004
 @superAdminRoles = SUPER_ADMIN
+
+# Buyer (Dùng để kiểm thử phân quyền role guard)
+@buyerId = 01912f10-0005-7000-8000-000000000005
+@buyerRoles = BUYER
+
+# Suspended Seller (Dùng để kiểm thử chính sách đình chỉ gian hàng)
+@suspendedSellerId = 01912f10-8888-7000-8000-000000008888
+@suspendedShopScope = 01912f20-8888-7000-8000-000000008888
 
 # Biến động thực thi (Các ID này sẽ được cập nhật tự động qua response hoặc điền thủ công)
 @categoryId = 01912f20-0000-7000-8000-000000000001
@@ -73,8 +81,8 @@ x-user-id: {{adminId}}
 x-user-roles: {{adminRoles}}
 
 {
-  "name": "Thời Trang Nam",
-  "slug": "thoi-trang-nam",
+  "name": "Thời Trang Nam {{$timestamp}}",
+  "slug": "thoi-trang-nam-{{$timestamp}}",
   "parent_id": null,
   "tax_rate_bps": 1000,
   "sort_order": 1
@@ -89,8 +97,8 @@ x-user-id: {{adminId}}
 x-user-roles: {{adminRoles}}
 
 {
-  "name": "Áo Khoác Nam",
-  "slug": "ao-khoac-nam",
+  "name": "Áo Khoác Nam {{$timestamp}}",
+  "slug": "ao-khoac-nam-{{$timestamp}}",
   "parent_id": "{{createRootCategory.response.body.data.category_id}}",
   "tax_rate_bps": null,
   "sort_order": 1
@@ -155,8 +163,8 @@ x-user-roles: {{sellerRoles}}
 x-user-shop-scope: {{sellerShopScope}}
 
 {
-  "title": "Áo Khoác Gió Nam Chống Nước 2026",
-  "slug": "ao-khoac-gio-nam-chong-nuoc-2026",
+  "title": "Áo Khoác Gió Nam Chống Nước {{$timestamp}}",
+  "slug": "ao-khoac-gio-nam-chong-nuoc-{{$timestamp}}",
   "brand": "Taca Active",
   "description": "<p>Áo khoác gió cao cấp, chất liệu <strong>Polyester chống nước</strong> an toàn.</p>",
   "price_summary": {
@@ -257,7 +265,7 @@ x-user-shop-scope: {{sellerShopScope}}
   ],
   "skus": [
     {
-      "seller_sku": "AKG-NAM-DEN-L",
+      "seller_sku": "AKG-NAM-DEN-L-{{$timestamp}}",
       "price_override": 389000,
       "attributes": {
         "color": "Đen",
@@ -266,7 +274,7 @@ x-user-shop-scope: {{sellerShopScope}}
       "status": "ACTIVE"
     },
     {
-      "seller_sku": "AKG-NAM-DEN-XL",
+      "seller_sku": "AKG-NAM-DEN-XL-{{$timestamp}}",
       "price_override": 399000,
       "attributes": {
         "color": "Đen",
@@ -357,10 +365,17 @@ x-user-shop-scope: {{sellerShopScope}}
 {
   "scope": "SPU",
   "content_type": "image/jpeg",
-  "size_bytes": 1500000,
-  "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "size_bytes": 36,
+  "sha256": "cb90535b0d8d9e0bf3b6a8e50c6c2703b7ed92e15e1d362aebdce7bf29ce6e62",
   "is_cover": true
 }
+
+### [4.1b] Client tải trực tiếp dữ liệu ảnh lên MinIO S3 qua Presigned URL
+# @name uploadBinaryToS3
+PUT {{requestUploadUrl.response.body.data.upload_url}}
+Content-Type: image/jpeg
+
+taca-ecommerce-test-cover-image-2026
 
 ### [4.2] Seller - Xác nhận hoàn tất upload (Complete Upload verify S3 HEAD)
 # Đúng chuẩn API Spec §3.2 (media_id, object_key, sha256)
@@ -375,7 +390,7 @@ x-user-shop-scope: {{sellerShopScope}}
 {
   "media_id": "{{requestUploadUrl.response.body.data.media_id}}",
   "object_key": "{{requestUploadUrl.response.body.data.object_key}}",
-  "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  "sha256": "cb90535b0d8d9e0bf3b6a8e50c6c2703b7ed92e15e1d362aebdce7bf29ce6e62"
 }
 
 ### [4.3] Edge Case: Cố tình đặt Video làm ảnh bìa (Video Cover Rejection)
@@ -581,11 +596,11 @@ Accept: application/json
 # Mong đợi: 403 Forbidden (PRODUCT_FORBIDDEN)
 GET {{baseUrl}}/seller/products
 Accept: application/json
-x-user-id: usr-buyer-001
-x-user-roles: BUYER
+x-user-id: {{buyerId}}
+x-user-roles: {{buyerRoles}}
 
 ### [9.3] Tấn công IDOR: Seller B cố tình cập nhật sản phẩm của Seller A
-# Mong đợi: 404 Not Found (PRODUCT_NOT_FOUND) - Kẹp CAS shop_id chặn tuyệt đối không cho chạm vào shop khác
+# Mong đợi: 403 Forbidden (PRODUCT_FORBIDDEN) hoặc 404 Not Found - CAS shop_id chặn tuyệt đối không cho chạm vào shop khác
 PATCH {{baseUrl}}/seller/products/{{createProductDraft.response.body.data.product_id}}
 Content-Type: application/json
 Accept: application/json
@@ -611,9 +626,9 @@ x-user-shop-scope: {{attackerShopScope}}
 POST {{baseUrl}}/seller/products/{{createProductDraft.response.body.data.product_id}}/publish
 Content-Type: application/json
 Accept: application/json
-x-user-id: usr-suspended-seller
-x-user-roles: SELLER
-x-user-shop-scope: shop-suspended-id
+x-user-id: {{suspendedSellerId}}
+x-user-roles: {{sellerRoles}}
+x-user-shop-scope: {{suspendedShopScope}}
 
 {
   "version": 1

@@ -1,14 +1,19 @@
 import {
   Body,
   Controller,
+  ForbiddenException,
   Get,
   HttpCode,
   HttpStatus,
+  Inject,
+  NotFoundException,
+  Optional,
   Param,
   Patch,
   Post,
   Put,
   Query,
+  forwardRef,
 } from '@nestjs/common';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { ShopScope } from '../../common/decorators/shop-scope.decorator';
@@ -26,11 +31,19 @@ import {
   UpdateProductResponseDto,
 } from '../dto/product-response.dto';
 import { SellerProductDetailDto } from '../dto/seller-product-detail.dto';
+import { ExportService } from '../../export/services/export.service';
+import { ExportProductsDto } from '../../export/dto/export-products.dto';
+import { ExportResponseDto } from '../../export/dto/export-response.dto';
 
 @Controller('seller/products')
 @Roles('SELLER', 'SELLER_STAFF')
 export class SellerProductController {
-  constructor(private readonly productService: ProductService) {}
+  constructor(
+    private readonly productService: ProductService,
+    @Optional()
+    @Inject(forwardRef(() => ExportService))
+    private readonly exportService?: ExportService,
+  ) {}
 
   @Post()
   @HttpCode(HttpStatus.CREATED)
@@ -48,6 +61,30 @@ export class SellerProductController {
     @Query() query: QueryProductDto,
   ): Promise<PaginatedSellerProductsDto> {
     return this.productService.getSellerProducts(shopScope, query);
+  }
+
+  @Get('export')
+  async exportProducts(
+    @Actor() actor: ActorContext,
+    @ShopScope() shopScope: string,
+    @Query() query: ExportProductsDto,
+  ): Promise<ExportResponseDto> {
+    const actorShopScope = shopScope || actor?.shopScope;
+    if (!actorShopScope) {
+      throw new ForbiddenException({
+        code: 'PRODUCT_FORBIDDEN',
+        message: 'Yêu cầu phạm vi cửa hàng (shop scope).',
+      });
+    }
+
+    if (!this.exportService) {
+      throw new NotFoundException({
+        code: 'PRODUCT_NOT_FOUND',
+        message: 'Export service is not available.',
+      });
+    }
+
+    return this.exportService.exportProducts(actorShopScope, query);
   }
 
   @Get(':productId')

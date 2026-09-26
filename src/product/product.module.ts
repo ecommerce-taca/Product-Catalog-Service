@@ -8,6 +8,7 @@ import { OutboxModule } from '../outbox/outbox.module';
 import { DatabaseModule } from '../database/database.module';
 import { MediaModule } from '../media/media.module';
 import { StorageModule } from '../integrations/storage/storage.module';
+import { ExportModule } from '../export/export.module';
 import { ProductRepository } from './repositories/product.repository';
 import { ProductService } from './services/product.service';
 import { SellerProductController } from './controllers/seller-product.controller';
@@ -22,6 +23,7 @@ import { SellerProductController } from './controllers/seller-product.controller
     DatabaseModule,
     forwardRef(() => MediaModule),
     StorageModule,
+    forwardRef(() => ExportModule),
   ],
   controllers: [SellerProductController],
   providers: [
