@@ -64,6 +64,7 @@ GET {{baseUrl}}/categories
 Accept: application/json
 
 ### [1.2] Admin - Tạo danh mục gốc (Root Category) với thuế suất VAT 10%
+# Bắt buộc tax_rate_bps ở category root (API Spec §3.4)
 # @name createRootCategory
 POST {{baseUrl}}/admin/catalog/categories
 Content-Type: application/json
@@ -99,7 +100,7 @@ x-user-roles: {{adminRoles}}
 GET {{baseUrl}}/categories/{{createSubCategory.response.body.data.category_id}}
 Accept: application/json
 
-### [1.5] Admin - Cập nhật thông tin danh mục (Yêu cầu version)
+### [1.5] Admin - Cập nhật thông tin danh mục (Yêu cầu version OCC)
 PATCH {{baseUrl}}/admin/catalog/categories/{{createSubCategory.response.body.data.category_id}}
 Content-Type: application/json
 Accept: application/json
@@ -125,11 +126,17 @@ x-user-roles: {{adminRoles}}
   "parent_id": "{{createSubCategory.response.body.data.category_id}}"
 }
 
-### [1.7] Admin - Lưu trữ danh mục (Soft Archive)
+### [1.7] Admin - Lưu trữ danh mục (Soft Archive, yêu cầu version)
 POST {{baseUrl}}/admin/catalog/categories/{{createSubCategory.response.body.data.category_id}}/archive
+Content-Type: application/json
 Accept: application/json
 x-user-id: {{adminId}}
 x-user-roles: {{adminRoles}}
+
+{
+  "version": 2,
+  "reason": "Chuyển đổi cấu trúc taxonomy mới"
+}
 
 
 ### ==============================================================================
@@ -138,6 +145,7 @@ x-user-roles: {{adminRoles}}
 
 ### [2.1] Seller - Tạo sản phẩm Draft mới (SPU)
 # Ghi chú: shop_id được Gateway kẹp từ x-user-shop-scope (không tin client body)
+# Bắt buộc title và slug (lowercase-hyphen)
 # @name createProductDraft
 POST {{baseUrl}}/seller/products
 Content-Type: application/json
@@ -337,6 +345,7 @@ x-user-shop-scope: {{sellerShopScope}}
 ### ==============================================================================
 
 ### [4.1] Seller - Xin Presigned Upload URL từ S3/MinIO
+# Đúng chuẩn API Spec §3.2 (content_type, size_bytes, sha256 64 hex, is_cover)
 # @name requestUploadUrl
 POST {{baseUrl}}/seller/products/{{createProductDraft.response.body.data.product_id}}/media/upload-url
 Content-Type: application/json
@@ -346,14 +355,15 @@ x-user-roles: {{sellerRoles}}
 x-user-shop-scope: {{sellerShopScope}}
 
 {
-  "file_name": "cover-ao-khoac.jpg",
+  "scope": "SPU",
   "content_type": "image/jpeg",
-  "file_size": 1500000,
-  "checksum_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "size_bytes": 1500000,
+  "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
   "is_cover": true
 }
 
 ### [4.2] Seller - Xác nhận hoàn tất upload (Complete Upload verify S3 HEAD)
+# Đúng chuẩn API Spec §3.2 (media_id, object_key, sha256)
 # @name completeUpload
 POST {{baseUrl}}/seller/products/{{createProductDraft.response.body.data.product_id}}/media/complete
 Content-Type: application/json
@@ -363,7 +373,9 @@ x-user-roles: {{sellerRoles}}
 x-user-shop-scope: {{sellerShopScope}}
 
 {
-  "media_id": "{{requestUploadUrl.response.body.data.media_id}}"
+  "media_id": "{{requestUploadUrl.response.body.data.media_id}}",
+  "object_key": "{{requestUploadUrl.response.body.data.object_key}}",
+  "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 }
 
 ### [4.3] Edge Case: Cố tình đặt Video làm ảnh bìa (Video Cover Rejection)
@@ -376,10 +388,10 @@ x-user-roles: {{sellerRoles}}
 x-user-shop-scope: {{sellerShopScope}}
 
 {
-  "file_name": "intro-video.mp4",
+  "scope": "SPU",
   "content_type": "video/mp4",
-  "file_size": 25000000,
-  "checksum_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "size_bytes": 25000000,
+  "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
   "is_cover": true
 }
 
@@ -389,33 +401,55 @@ x-user-shop-scope: {{sellerShopScope}}
 ### ==============================================================================
 
 ### [5.1] Seller - Xuất bản sản phẩm (Publish Product: DRAFT -> ACTIVE)
-# Yêu cầu: Shop KYC Approved, Có ít nhất 1 ảnh cover READY, Có ít nhất 1 SKU active
+# Đúng chuẩn API Spec §3.2 (Yêu cầu version trong body)
 POST {{baseUrl}}/seller/products/{{createProductDraft.response.body.data.product_id}}/publish
+Content-Type: application/json
 Accept: application/json
 x-user-id: {{sellerId}}
 x-user-roles: {{sellerRoles}}
 x-user-shop-scope: {{sellerShopScope}}
+
+{
+  "version": 4
+}
 
 ### [5.2] Seller - Tạm ngưng kinh doanh sản phẩm (Unpublish: ACTIVE -> INACTIVE)
 POST {{baseUrl}}/seller/products/{{createProductDraft.response.body.data.product_id}}/unpublish
+Content-Type: application/json
 Accept: application/json
 x-user-id: {{sellerId}}
 x-user-roles: {{sellerRoles}}
 x-user-shop-scope: {{sellerShopScope}}
+
+{
+  "version": 5,
+  "reason": "Tạm dừng kinh doanh để kiểm kê kho"
+}
 
 ### [5.3] Seller - Bật lại kinh doanh sản phẩm (Publish lại: INACTIVE -> ACTIVE)
 POST {{baseUrl}}/seller/products/{{createProductDraft.response.body.data.product_id}}/publish
+Content-Type: application/json
 Accept: application/json
 x-user-id: {{sellerId}}
 x-user-roles: {{sellerRoles}}
 x-user-shop-scope: {{sellerShopScope}}
 
+{
+  "version": 6
+}
+
 ### [5.4] Seller - Lưu trữ sản phẩm (Archive SPU: Soft delete)
 POST {{baseUrl}}/seller/products/{{createProductDraft.response.body.data.product_id}}/archive
+Content-Type: application/json
 Accept: application/json
 x-user-id: {{sellerId}}
 x-user-roles: {{sellerRoles}}
 x-user-shop-scope: {{sellerShopScope}}
+
+{
+  "version": 7,
+  "reason": "Ngừng kinh doanh mẫu sản phẩm này"
+}
 
 
 ### ==============================================================================
@@ -504,7 +538,7 @@ Accept: application/json
 x-user-id: {{adminId}}
 x-user-roles: {{adminRoles}}
 
-### [8.3] Admin - Khóa sản phẩm vi phạm (Block Product: Ghi lý do & audit log)
+### [8.3] Admin - Khóa sản phẩm vi phạm (Block Product: Yêu cầu version & reason)
 POST {{baseUrl}}/admin/catalog/products/{{createProductDraft.response.body.data.product_id}}/block
 Content-Type: application/json
 Accept: application/json
@@ -512,6 +546,7 @@ x-user-id: {{adminId}}
 x-user-roles: {{adminRoles}}
 
 {
+  "version": 4,
   "reason": "Sản phẩm vi phạm bản quyền thương hiệu theo yêu cầu từ hãng."
 }
 
@@ -522,9 +557,15 @@ Accept: application/json
 
 ### [8.5] Admin - Mở khóa sản phẩm (Unblock Product: Chuyển về INACTIVE để Seller rà soát lại)
 POST {{baseUrl}}/admin/catalog/products/{{createProductDraft.response.body.data.product_id}}/unblock
+Content-Type: application/json
 Accept: application/json
 x-user-id: {{adminId}}
 x-user-roles: {{adminRoles}}
+
+{
+  "version": 5,
+  "reason": "Đã xử lý và khắc phục vi phạm."
+}
 
 
 ### ==============================================================================
@@ -568,7 +609,12 @@ x-user-shop-scope: {{attackerShopScope}}
 ### [9.5] Shop bị đình chỉ (SUSPENDED): Cố tình xuất bản sản phẩm
 # Mong đợi: 403 Forbidden (PRODUCT_SHOP_SUSPENDED)
 POST {{baseUrl}}/seller/products/{{createProductDraft.response.body.data.product_id}}/publish
+Content-Type: application/json
 Accept: application/json
 x-user-id: usr-suspended-seller
 x-user-roles: SELLER
 x-user-shop-scope: shop-suspended-id
+
+{
+  "version": 1
+}
