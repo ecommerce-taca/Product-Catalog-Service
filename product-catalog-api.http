@@ -676,3 +676,75 @@ x-user-shop-scope: {{suspendedShopScope}}
 GET {{baseUrl}}/seller/products/import/template
 Accept: application/json
 
+### [10.6] Upload file Excel hợp lệ -> 202 Accepted
+# Tiếp nhận tệp và khởi tạo tác vụ import ngầm (< 500ms)
+POST {{baseUrl}}/seller/products/import
+Content-Type: multipart/form-data; boundary=WebAppBoundary
+x-user-id: {{sellerId}}
+x-user-roles: {{sellerRoles}}
+x-user-shop-scope: {{sellerShopScope}}
+
+--WebAppBoundary
+Content-Disposition: form-data; name="file"; filename="sample-import.xlsx"
+Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+
+< ./test/fixtures/sample-import.xlsx
+--WebAppBoundary--
+
+### [10.7] Upload file vượt quá 2MB -> 400 Bad Request (PRODUCT_IMPORT_FILE_TOO_LARGE)
+POST {{baseUrl}}/seller/products/import
+Content-Type: multipart/form-data; boundary=WebAppBoundary
+x-user-id: {{sellerId}}
+x-user-roles: {{sellerRoles}}
+x-user-shop-scope: {{sellerShopScope}}
+
+--WebAppBoundary
+Content-Disposition: form-data; name="file"; filename="oversize-import.xlsx"
+Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+
+< ./test/fixtures/oversize-import.xlsx
+--WebAppBoundary--
+
+### [10.8] Upload file sai định dạng -> 400 Bad Request (PRODUCT_IMPORT_FILE_TYPE_INVALID)
+POST {{baseUrl}}/seller/products/import
+Content-Type: multipart/form-data; boundary=WebAppBoundary
+x-user-id: {{sellerId}}
+x-user-roles: {{sellerRoles}}
+x-user-shop-scope: {{sellerShopScope}}
+
+--WebAppBoundary
+Content-Disposition: form-data; name="file"; filename="sample-import.csv"
+Content-Type: text/csv
+
+< ./test/fixtures/sample-import.csv
+--WebAppBoundary--
+
+### [10.9] Upload khi đang có job PROCESSING/PENDING -> 409 Conflict (PRODUCT_IMPORT_JOB_RUNNING)
+POST {{baseUrl}}/seller/products/import
+Content-Type: multipart/form-data; boundary=WebAppBoundary
+x-user-id: {{sellerId}}
+x-user-roles: {{sellerRoles}}
+x-user-shop-scope: {{sellerShopScope}}
+
+--WebAppBoundary
+Content-Disposition: form-data; name="file"; filename="sample-import.xlsx"
+Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+
+< ./test/fixtures/sample-import.xlsx
+--WebAppBoundary--
+
+### [10.10] Shop bị đình chỉ (SUSPENDED) upload -> 403 Forbidden (PRODUCT_SHOP_SUSPENDED)
+POST {{baseUrl}}/seller/products/import
+Content-Type: multipart/form-data; boundary=WebAppBoundary
+x-user-id: {{suspendedSellerId}}
+x-user-roles: {{sellerRoles}}
+x-user-shop-scope: {{suspendedShopScope}}
+
+--WebAppBoundary
+Content-Disposition: form-data; name="file"; filename="sample-import.xlsx"
+Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+
+< ./test/fixtures/sample-import.xlsx
+--WebAppBoundary--
+
+

@@ -1,8 +1,20 @@
 import { ForbiddenException, HttpStatus } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { Response } from 'express';
+
+jest.mock('sanitize-html', () => {
+  return jest.fn().mockImplementation((input: string) => {
+    if (!input) return input;
+    return input
+      .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, '')
+      .replace(/<iframe\b[^<]*(?:(?!<\/iframe>)<[^<]*)*<\/iframe>/gi, '');
+  });
+});
+
 import { SellerImportController } from '../../src/import/controllers/seller-import.controller';
 import { ExcelTemplateService } from '../../src/import/services/excel-template.service';
+import { ImportWorkerService } from '../../src/import/services/import-worker.service';
+import { S3StorageService } from '../../src/integrations/storage/s3-storage.service';
 import { SHOP_SNAPSHOT_REPOSITORY_PORT } from '../../src/projections/repositories/shop-snapshot.repository.interface';
 import { ShopStatus } from '../../src/database/schemas/shop-snapshot.schema';
 import { ActorContext } from '../../src/common/context/actor-context.interface';
@@ -34,6 +46,19 @@ describe('SellerImportController', () => {
     isAuthenticated: true,
   };
 
+  const mockImportJobRepository = {
+    findActiveJobByShop: jest.fn(),
+    create: jest.fn(),
+  };
+
+  const mockImportWorkerService = {
+    processJob: jest.fn().mockResolvedValue(undefined),
+  };
+
+  const mockS3StorageService = {
+    uploadBuffer: jest.fn().mockResolvedValue(undefined),
+  };
+
   beforeEach(async () => {
     jest.clearAllMocks();
 
@@ -44,6 +69,18 @@ describe('SellerImportController', () => {
         {
           provide: SHOP_SNAPSHOT_REPOSITORY_PORT,
           useValue: mockShopSnapshotRepository,
+        },
+        {
+          provide: 'ImportJobRepositoryPort',
+          useValue: mockImportJobRepository,
+        },
+        {
+          provide: ImportWorkerService,
+          useValue: mockImportWorkerService,
+        },
+        {
+          provide: S3StorageService,
+          useValue: mockS3StorageService,
         },
       ],
     }).compile();

@@ -87,6 +87,54 @@ function uploadToUrl(url, buffer, contentType) {
   });
 }
 
+function uploadMultipart(path, headers = {}, fileBuffer, filename = 'products.xlsx', fieldName = 'file', contentType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet') {
+  return new Promise((resolve, reject) => {
+    const boundary = '----WebKitFormBoundary' + crypto.randomBytes(16).toString('hex');
+    const headerPart = Buffer.from(
+      `--${boundary}\r\n` +
+      `Content-Disposition: form-data; name="${fieldName}"; filename="${filename}"\r\n` +
+      `Content-Type: ${contentType}\r\n\r\n`
+    );
+    const footerPart = Buffer.from(`\r\n--${boundary}--\r\n`);
+    const bodyBuffer = Buffer.concat([headerPart, fileBuffer, footerPart]);
+
+    const options = {
+      hostname: HOST,
+      port: PORT,
+      path: path,
+      method: 'POST',
+      headers: {
+        'Content-Type': `multipart/form-data; boundary=${boundary}`,
+        'Content-Length': bodyBuffer.length,
+        'Accept': 'application/json',
+        ...headers,
+      },
+    };
+
+    const req = http.request(options, (res) => {
+      let data = '';
+      res.on('data', (chunk) => (data += chunk));
+      res.on('end', () => {
+        let json = null;
+        try {
+          json = JSON.parse(data);
+        } catch (e) {
+          json = data;
+        }
+        resolve({
+          status: res.statusCode,
+          headers: res.headers,
+          data: json,
+        });
+      });
+    });
+
+    req.on('error', (e) => reject(e));
+    req.write(bodyBuffer);
+    req.end();
+  });
+}
+
 async function run() {
   console.log('=== RUNNING COMPLETE HTTP TEST SUITE AGAINST LOCALHOST:3000 ===\n');
 
@@ -371,8 +419,42 @@ async function run() {
   res = await request('GET', `${BASE_PATH}/seller/products/import/template`);
   console.log(`[10.5] GET /seller/products/import/template (unauthorized) => ${res.status}`, res.data?.error?.code);
 
+  // Load sample fixtures for upload tests
+  const fs = require('fs');
+  const path = require('path');
+  const fixturesDir = path.join(__dirname, 'fixtures');
+  const sampleXlsx = fs.readFileSync(path.join(fixturesDir, 'sample-import.xlsx'));
+  const oversizeXlsx = fs.readFileSync(path.join(fixturesDir, 'oversize-import.xlsx'));
+  const sampleCsv = fs.readFileSync(path.join(fixturesDir, 'sample-import.csv'));
+
+  // Test 10.6: Upload Valid Excel File -> 202 Accepted
+  res = await uploadMultipart(`${BASE_PATH}/seller/products/import`, sellerHeaders, sampleXlsx, 'sample-import.xlsx');
+  console.log(`[10.6] POST /seller/products/import (valid file) => ${res.status}`, `JobId: ${res.data?.data?.job_id || res.data?.data?.jobId}, Status: ${res.data?.data?.status}`);
+  const importJobId = res.data?.data?.job_id || res.data?.data?.jobId;
+
+  // Test 10.7: Upload File > 2MB -> 400 Bad Request (PRODUCT_IMPORT_FILE_TOO_LARGE)
+  res = await uploadMultipart(`${BASE_PATH}/seller/products/import`, sellerHeaders, oversizeXlsx, 'oversize-import.xlsx');
+  console.log(`[10.7] POST /seller/products/import (>2MB oversize) => ${res.status}`, res.data?.error?.code);
+
+  // Test 10.8: Upload File Invalid Format (.csv) -> 400 Bad Request (PRODUCT_IMPORT_FILE_TYPE_INVALID)
+  res = await uploadMultipart(`${BASE_PATH}/seller/products/import`, sellerHeaders, sampleCsv, 'sample-import.csv', 'file', 'text/csv');
+  console.log(`[10.8] POST /seller/products/import (invalid format csv) => ${res.status}`, res.data?.error?.code);
+
+  // Test 10.9: Upload when active job running -> 409 Conflict (PRODUCT_IMPORT_JOB_RUNNING)
+  // If the job from 10.6 is still processing/pending or simulated:
+  res = await uploadMultipart(`${BASE_PATH}/seller/products/import`, sellerHeaders, sampleXlsx, 'sample-import.xlsx');
+  console.log(`[10.9] POST /seller/products/import (concurrent job attempt) => ${res.status}`, res.data?.error?.code || `Accepted (job 10.6 completed already: ${res.data?.data?.status})`);
+
+  // Test 10.10: Suspended Shop Upload Attempt -> 403 Forbidden (PRODUCT_SHOP_SUSPENDED)
+  res = await uploadMultipart(`${BASE_PATH}/seller/products/import`, {
+    ...sellerHeaders,
+    'x-user-shop-scope': '01912f20-8888-7000-8000-000000008888',
+  }, sampleXlsx, 'sample-import.xlsx');
+  console.log(`[10.10] POST /seller/products/import (suspended shop) => ${res.status}`, res.data?.error?.code);
+
   console.log('\n=== ALL HTTP RUNNER TESTS EXECUTED SUCCESSFULLY ===');
 }
 
 run().catch((e) => console.error('FATAL ERROR:', e));
+
 
