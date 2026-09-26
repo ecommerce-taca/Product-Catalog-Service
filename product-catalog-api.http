@@ -1,0 +1,549 @@
+### ==============================================================================
+### PRODUCT CATALOG SERVICE - HTTP API QUICK TEST SUITE
+### Tài liệu quy chuẩn: product-catalog-docs/docs/api/product-catalog.md
+### Tiêu chuẩn kỹ thuật: Decisions D1-D5, NFR-01..08, OWASP API Top 10
+### ==============================================================================
+
+### ------------------------------------------------------------------------------
+### CẤU HÌNH BIẾN MÔI TRƯỜNG TOÀN CỤC (GLOBAL VARIABLES)
+### ------------------------------------------------------------------------------
+@host = http://localhost:3000
+@baseUrl = http://localhost:3000/api/v1
+
+# Actor Mock Headers (Mô phỏng Authentication Context từ API Gateway)
+# Seller 1 (Chính chủ)
+@sellerId = usr-seller-01912f10-0001
+@sellerShopScope = shop-01912f20-0001-7000-8000-000000000001
+@sellerRoles = SELLER
+
+# Seller Staff
+@staffId = usr-staff-01912f10-0002
+@staffRoles = SELLER_STAFF
+
+# Attacker / Seller 2 (Dùng để kiểm thử tấn công IDOR)
+@attackerId = usr-attacker-01912f10-9999
+@attackerShopScope = shop-01912f20-9999-7000-8000-000000009999
+@attackerRoles = SELLER
+
+# Admin & Super Admin
+@adminId = usr-admin-01912f10-0003
+@adminRoles = CATALOG_ADMIN
+
+@superAdminId = usr-superadmin-01912f10-0004
+@superAdminRoles = SUPER_ADMIN
+
+# Biến động thực thi (Các ID này sẽ được cập nhật tự động hoặc điền thủ công)
+@categoryId = 01912f20-0000-7000-8000-000000000001
+@subCategoryId = 01912f20-0000-7000-8000-000000000002
+@productId = 01912f30-0000-7000-8000-000000000001
+@skuId = 01912f40-0000-7000-8000-000000000001
+@mediaId = 01912f50-0000-7000-8000-000000000001
+
+
+### ==============================================================================
+### PHẦN 0: KIỂM TRA SỨC KHỎE DỊCH VỤ (HEALTH CHECKS)
+### ==============================================================================
+
+### [0.1] Liveness Probe (Gateway active health check)
+# Không có prefix /api/v1 (Quy ước router exclusion)
+GET {{host}}/health/live
+Accept: application/json
+
+### [0.2] Readiness Probe (Kiểm tra kết nối MongoDB Database)
+GET {{host}}/health/ready
+Accept: application/json
+
+
+### ==============================================================================
+### PHẦN 1: QUẢN TRỊ TAXONOMY & CÂY DANH MỤC (ADMIN & PUBLIC)
+### ==============================================================================
+
+### [1.1] Public - Lấy toàn bộ cây danh mục công khai (Category Tree)
+# @name getCategoryTree
+GET {{baseUrl}}/categories
+Accept: application/json
+
+### [1.2] Admin - Tạo danh mục gốc (Root Category) với thuế suất VAT 10%
+# @name createRootCategory
+POST {{baseUrl}}/admin/catalog/categories
+Content-Type: application/json
+Accept: application/json
+x-user-id: {{adminId}}
+x-user-roles: {{adminRoles}}
+
+{
+  "name": "Thời Trang Nam",
+  "slug": "thoi-trang-nam",
+  "parent_id": null,
+  "tax_rate_bps": 1000,
+  "is_leaf": false,
+  "display_order": 1
+}
+
+### [1.3] Admin - Tạo danh mục con (Sub Category) kế thừa thuế suất từ cha
+# @name createSubCategory
+POST {{baseUrl}}/admin/catalog/categories
+Content-Type: application/json
+Accept: application/json
+x-user-id: {{adminId}}
+x-user-roles: {{adminRoles}}
+
+{
+  "name": "Áo Khoác Nam",
+  "slug": "ao-khoac-nam",
+  "parent_id": "{{createRootCategory.response.body.data.category_id}}",
+  "tax_rate_bps": null,
+  "is_leaf": true,
+  "display_order": 1
+}
+
+### [1.4] Public - Lấy thông tin chi tiết một danh mục
+GET {{baseUrl}}/categories/{{createSubCategory.response.body.data.category_id}}
+Accept: application/json
+
+### [1.5] Admin - Cập nhật thông tin danh mục
+PATCH {{baseUrl}}/admin/catalog/categories/{{createSubCategory.response.body.data.category_id}}
+Content-Type: application/json
+Accept: application/json
+x-user-id: {{adminId}}
+x-user-roles: {{adminRoles}}
+
+{
+  "name": "Áo Khoác Nam Cao Cấp",
+  "display_order": 2
+}
+
+### [1.6] Edge Case: Tạo vòng lặp chu kỳ danh mục (Cycle Detection)
+# Mong đợi: 400 Bad Request (PRODUCT_CATEGORY_CYCLE_DETECTED)
+PATCH {{baseUrl}}/admin/catalog/categories/{{createRootCategory.response.body.data.category_id}}
+Content-Type: application/json
+Accept: application/json
+x-user-id: {{adminId}}
+x-user-roles: {{adminRoles}}
+
+{
+  "parent_id": "{{createSubCategory.response.body.data.category_id}}"
+}
+
+### [1.7] Admin - Lưu trữ danh mục (Soft Archive)
+POST {{baseUrl}}/admin/catalog/categories/{{createSubCategory.response.body.data.category_id}}/archive
+Accept: application/json
+x-user-id: {{adminId}}
+x-user-roles: {{adminRoles}}
+
+
+### ==============================================================================
+### PHẦN 2: TẠO SẢN PHẨM SPU & VÒNG ĐỜI DRAFT (SELLER)
+### ==============================================================================
+
+### [2.1] Seller - Tạo sản phẩm Draft mới (SPU)
+# Ghi chú: shop_id được Gateway kẹp từ x-user-shop-scope (không tin client body)
+# @name createProductDraft
+POST {{baseUrl}}/seller/products
+Content-Type: application/json
+Accept: application/json
+x-user-id: {{sellerId}}
+x-user-roles: {{sellerRoles}}
+x-user-shop-scope: {{sellerShopScope}}
+
+{
+  "title": "Áo Khoác Gió Nam Chống Nước 2026",
+  "brand": "Taca Active",
+  "description": "<p>Áo khoác gió cao cấp, chất liệu <strong>Polyester chống nước</strong> an toàn.</p>",
+  "package_dimensions": {
+    "weight_g": 350,
+    "length_cm": 30,
+    "width_cm": 20,
+    "height_cm": 5
+  }
+}
+
+### [2.2] Seller - Xem danh sách sản phẩm trong Shop của mình
+GET {{baseUrl}}/seller/products?page=1&size=20
+Accept: application/json
+x-user-id: {{sellerId}}
+x-user-roles: {{sellerRoles}}
+x-user-shop-scope: {{sellerShopScope}}
+
+### [2.3] Seller - Xem chi tiết sản phẩm Draft
+# @name getSellerProductDetail
+GET {{baseUrl}}/seller/products/{{createProductDraft.response.body.data.product_id}}
+Accept: application/json
+x-user-id: {{sellerId}}
+x-user-roles: {{sellerRoles}}
+x-user-shop-scope: {{sellerShopScope}}
+
+### [2.4] Seller - Cập nhật thông tin SPU (Kèm chống XSS sanitize-html & CAS OCC version)
+PATCH {{baseUrl}}/seller/products/{{createProductDraft.response.body.data.product_id}}
+Content-Type: application/json
+Accept: application/json
+x-user-id: {{sellerId}}
+x-user-roles: {{sellerRoles}}
+x-user-shop-scope: {{sellerShopScope}}
+
+{
+  "version": {{getSellerProductDetail.response.body.data.version}},
+  "title": "Áo Khoác Gió Nam Chống Nước Bản Nâng Cấp 2026",
+  "description": "<p>Mô tả chuẩn <script>alert('xss-stripping-test')</script><strong>chống thấm nước tuyệt đối</strong>.</p>"
+}
+
+### [2.5] Edge Case: Xung đột phiên bản Optimistic Concurrency Control (OCC Mismatch)
+# Mong đợi: 409 Conflict (PRODUCT_VERSION_CONFLICT)
+PATCH {{baseUrl}}/seller/products/{{createProductDraft.response.body.data.product_id}}
+Content-Type: application/json
+Accept: application/json
+x-user-id: {{sellerId}}
+x-user-roles: {{sellerRoles}}
+x-user-shop-scope: {{sellerShopScope}}
+
+{
+  "version": 999999,
+  "title": "Cố tình gửi sai phiên bản version"
+}
+
+
+### ==============================================================================
+### PHẦN 3: GÁN DANH MỤC & THIẾT LẬP MA TRẬN SKU (SELLER)
+### ==============================================================================
+
+### [3.1] Seller - Gán 1 danh mục chính (Primary) và tối đa 2 danh mục phụ
+PUT {{baseUrl}}/seller/products/{{createProductDraft.response.body.data.product_id}}/categories
+Content-Type: application/json
+Accept: application/json
+x-user-id: {{sellerId}}
+x-user-roles: {{sellerRoles}}
+x-user-shop-scope: {{sellerShopScope}}
+
+{
+  "primary_category_id": "{{createSubCategory.response.body.data.category_id}}",
+  "secondary_category_ids": []
+}
+
+### [3.2] Seller - Tạo ma trận biến thể SKUs (Giá nguyên VND BigInt, Variant Resolver)
+# @name updateProductSkus
+PUT {{baseUrl}}/seller/products/{{createProductDraft.response.body.data.product_id}}/skus
+Content-Type: application/json
+Accept: application/json
+x-user-id: {{sellerId}}
+x-user-roles: {{sellerRoles}}
+x-user-shop-scope: {{sellerShopScope}}
+
+{
+  "skus": [
+    {
+      "seller_sku": "AKG-NAM-DEN-L",
+      "price_override": {
+        "base_price": 450000,
+        "sale_price": 389000
+      },
+      "attributes": [
+        { "name": "Màu sắc", "value": "Đen" },
+        { "name": "Kích cỡ", "value": "L" }
+      ],
+      "status": "ACTIVE"
+    },
+    {
+      "seller_sku": "AKG-NAM-DEN-XL",
+      "price_override": {
+        "base_price": 450000,
+        "sale_price": 399000
+      },
+      "attributes": [
+        { "name": "Màu sắc", "value": "Đen" },
+        { "name": "Kích cỡ", "value": "XL" }
+      ],
+      "status": "ACTIVE"
+    }
+  ]
+}
+
+### [3.3] Edge Case: Trùng lặp seller_sku trong cùng một Shop
+# Mong đợi: 409 Conflict (PRODUCT_SKU_DUPLICATE)
+PUT {{baseUrl}}/seller/products/{{createProductDraft.response.body.data.product_id}}/skus
+Content-Type: application/json
+Accept: application/json
+x-user-id: {{sellerId}}
+x-user-roles: {{sellerRoles}}
+x-user-shop-scope: {{sellerShopScope}}
+
+{
+  "skus": [
+    {
+      "seller_sku": "AKG-NAM-DEN-L",
+      "price_override": { "base_price": 300000, "sale_price": 250000 },
+      "attributes": [{ "name": "Màu", "value": "Đen" }],
+      "status": "ACTIVE"
+    },
+    {
+      "seller_sku": "AKG-NAM-DEN-L",
+      "price_override": { "base_price": 300000, "sale_price": 250000 },
+      "attributes": [{ "name": "Màu", "value": "Đen Trùng" }],
+      "status": "ACTIVE"
+    }
+  ]
+}
+
+### [3.4] Edge Case: Giá tiền âm hoặc số thực thập phân
+# Mong đợi: 400 Bad Request (PRODUCT_INVALID_INPUT)
+PUT {{baseUrl}}/seller/products/{{createProductDraft.response.body.data.product_id}}/skus
+Content-Type: application/json
+Accept: application/json
+x-user-id: {{sellerId}}
+x-user-roles: {{sellerRoles}}
+x-user-shop-scope: {{sellerShopScope}}
+
+{
+  "skus": [
+    {
+      "seller_sku": "AKG-PRICE-INVALID",
+      "price_override": {
+        "base_price": -50000,
+        "sale_price": 399.99
+      },
+      "attributes": [{ "name": "Size", "value": "M" }],
+      "status": "ACTIVE"
+    }
+  ]
+}
+
+
+### ==============================================================================
+### PHẦN 4: TẢI LÊN HÌNH ẢNH & S3 STORAGE (SELLER)
+### ==============================================================================
+
+### [4.1] Seller - Xin Presigned Upload URL từ S3/MinIO
+# @name requestUploadUrl
+POST {{baseUrl}}/seller/products/{{createProductDraft.response.body.data.product_id}}/media/upload-url
+Content-Type: application/json
+Accept: application/json
+x-user-id: {{sellerId}}
+x-user-roles: {{sellerRoles}}
+x-user-shop-scope: {{sellerShopScope}}
+
+{
+  "file_name": "cover-ao-khoac.jpg",
+  "content_type": "image/jpeg",
+  "file_size": 1500000,
+  "checksum_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "is_cover": true
+}
+
+### [4.2] Seller - Xác nhận hoàn tất upload (Complete Upload verify S3 HEAD)
+# @name completeUpload
+POST {{baseUrl}}/seller/products/{{createProductDraft.response.body.data.product_id}}/media/complete
+Content-Type: application/json
+Accept: application/json
+x-user-id: {{sellerId}}
+x-user-roles: {{sellerRoles}}
+x-user-shop-scope: {{sellerShopScope}}
+
+{
+  "media_id": "{{requestUploadUrl.response.body.data.media_id}}"
+}
+
+### [4.3] Edge Case: Cố tình đặt Video làm ảnh bìa (Video Cover Rejection)
+# Mong đợi: 400 Bad Request (PRODUCT_INVALID_MEDIA_TYPE)
+POST {{baseUrl}}/seller/products/{{createProductDraft.response.body.data.product_id}}/media/upload-url
+Content-Type: application/json
+Accept: application/json
+x-user-id: {{sellerId}}
+x-user-roles: {{sellerRoles}}
+x-user-shop-scope: {{sellerShopScope}}
+
+{
+  "file_name": "intro-video.mp4",
+  "content_type": "video/mp4",
+  "file_size": 25000000,
+  "checksum_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "is_cover": true
+}
+
+
+### ==============================================================================
+### PHẦN 5: XUẤT BẢN & VÒNG ĐỜI TRẠNG THÁI SẢN PHẨM (SELLER)
+### ==============================================================================
+
+### [5.1] Seller - Xuất bản sản phẩm (Publish Product: DRAFT -> ACTIVE)
+# Yêu cầu: Shop KYC Approved, Có ít nhất 1 ảnh cover READY, Có ít nhất 1 SKU active
+POST {{baseUrl}}/seller/products/{{createProductDraft.response.body.data.product_id}}/publish
+Accept: application/json
+x-user-id: {{sellerId}}
+x-user-roles: {{sellerRoles}}
+x-user-shop-scope: {{sellerShopScope}}
+
+### [5.2] Seller - Tạm ngưng kinh doanh sản phẩm (Unpublish: ACTIVE -> INACTIVE)
+POST {{baseUrl}}/seller/products/{{createProductDraft.response.body.data.product_id}}/unpublish
+Accept: application/json
+x-user-id: {{sellerId}}
+x-user-roles: {{sellerRoles}}
+x-user-shop-scope: {{sellerShopScope}}
+
+### [5.3] Seller - Bật lại kinh doanh sản phẩm (Publish lại: INACTIVE -> ACTIVE)
+POST {{baseUrl}}/seller/products/{{createProductDraft.response.body.data.product_id}}/publish
+Accept: application/json
+x-user-id: {{sellerId}}
+x-user-roles: {{sellerRoles}}
+x-user-shop-scope: {{sellerShopScope}}
+
+### [5.4] Seller - Lưu trữ sản phẩm (Archive SPU: Soft delete)
+POST {{baseUrl}}/seller/products/{{createProductDraft.response.body.data.product_id}}/archive
+Accept: application/json
+x-user-id: {{sellerId}}
+x-user-roles: {{sellerRoles}}
+x-user-shop-scope: {{sellerShopScope}}
+
+
+### ==============================================================================
+### PHẦN 6: TRUY VẤN PUBLIC CATALOG & HYDRATION (BUYER / GUEST)
+### ==============================================================================
+
+### [6.1] Public - Danh sách sản phẩm trang chủ (Mặc định page=1, size=20, chỉ trả ACTIVE)
+GET {{baseUrl}}/products
+Accept: application/json
+
+### [6.2] Public - Bộ lọc danh mục, khoảng giá VND, và sắp xếp giá tăng dần
+GET {{baseUrl}}/products?category_id={{createSubCategory.response.body.data.category_id}}&min_price=100000&max_price=500000&sort=price_asc
+Accept: application/json
+
+### [6.3] Public - Batch Hydration qua product_ids (Dùng cho Giỏ hàng & Yêu thích)
+# Trả về các sản phẩm ACTIVE, giữ thứ tự client gửi, bỏ qua ID không hợp lệ mà không báo lỗi
+GET {{baseUrl}}/products?product_ids={{createProductDraft.response.body.data.product_id}},01912f30-non-existent-uuid
+Accept: application/json
+
+### [6.4] Public - Chi tiết sản phẩm PDP (Product Detail Page)
+# Bao gồm: Shop snapshot, Category tax rate kế thừa, Dynamic attributes, SKUs & stock projection
+GET {{baseUrl}}/products/{{createProductDraft.response.body.data.product_id}}
+Accept: application/json
+
+### [6.5] Public - Danh sách sản phẩm theo Shop
+GET {{baseUrl}}/shops/{{sellerShopScope}}/products?page=1&size=10
+Accept: application/json
+
+### [6.6] Edge Case: Nguyên tắc Zero Existence Leak (Không leak sản phẩm DRAFT / ARCHIVED)
+# Mong đợi: 404 Not Found (PRODUCT_NOT_FOUND)
+GET {{baseUrl}}/products/01912f30-0000-0000-0000-000000000000
+Accept: application/json
+
+### [6.7] Edge Case: DoS Protection - Giới hạn kích thước trang (size > 100)
+# Mong đợi: 400 Bad Request (PRODUCT_INVALID_INPUT)
+GET {{baseUrl}}/products?size=150
+Accept: application/json
+
+### [6.8] Edge Case: DoS Protection - Batch Hydration vượt quá 100 IDs
+# Mong đợi: 400 Bad Request (PRODUCT_INVALID_INPUT)
+GET {{baseUrl}}/products?product_ids=id1,id2,...,id101
+Accept: application/json
+
+
+### ==============================================================================
+### PHẦN 7: XUẤT BẢO CÁO SẢN PHẨM SELLER EXPORT (CSV / EXCEL)
+### ==============================================================================
+
+### [7.1] Seller - Xuất toàn bộ danh sách sản phẩm ra file CSV (Mặc định format=csv)
+# File trả về presigned download URL 30 phút, chống CSV Formula Injection (CWE-1236)
+GET {{baseUrl}}/seller/products/export
+Accept: application/json
+x-user-id: {{sellerId}}
+x-user-roles: {{sellerRoles}}
+x-user-shop-scope: {{sellerShopScope}}
+
+### [7.2] Seller - Xuất danh sách sản phẩm theo bộ lọc trạng thái và từ khóa tìm kiếm
+GET {{baseUrl}}/seller/products/export?status=ACTIVE&q=Ao&format=csv
+Accept: application/json
+x-user-id: {{sellerId}}
+x-user-roles: {{sellerRoles}}
+x-user-shop-scope: {{sellerShopScope}}
+
+### [7.3] Edge Case: Định dạng xuất file không được hỗ trợ
+# Mong đợi: 400 Bad Request (PRODUCT_INVALID_INPUT)
+GET {{baseUrl}}/seller/products/export?format=pdf
+Accept: application/json
+x-user-id: {{sellerId}}
+x-user-roles: {{sellerRoles}}
+x-user-shop-scope: {{sellerShopScope}}
+
+
+### ==============================================================================
+### PHẦN 8: KIỂM DUYỆT SẢN PHẨM & AUDIT TRAIL (CATALOG ADMIN)
+### ==============================================================================
+
+### [8.1] Admin - Danh sách sản phẩm toàn sàn (Bao gồm mọi trạng thái DRAFT, BLOCKED, ACTIVE...)
+GET {{baseUrl}}/admin/catalog/products?page=1&size=20
+Accept: application/json
+x-user-id: {{adminId}}
+x-user-roles: {{adminRoles}}
+
+### [8.2] Admin - Xem chi tiết sản phẩm bất kể trạng thái ẩn/hiện
+GET {{baseUrl}}/admin/catalog/products/{{createProductDraft.response.body.data.product_id}}
+Accept: application/json
+x-user-id: {{adminId}}
+x-user-roles: {{adminRoles}}
+
+### [8.3] Admin - Khóa sản phẩm vi phạm (Block Product: Ghi lý do & audit log)
+POST {{baseUrl}}/admin/catalog/products/{{createProductDraft.response.body.data.product_id}}/block
+Content-Type: application/json
+Accept: application/json
+x-user-id: {{adminId}}
+x-user-roles: {{adminRoles}}
+
+{
+  "reason": "Sản phẩm vi phạm bản quyền thương hiệu theo yêu cầu từ hãng."
+}
+
+### [8.4] Public - Thử truy cập sản phẩm vừa bị Admin khóa (Zero Leak Check)
+# Mong đợi: 404 Not Found (PRODUCT_NOT_FOUND) - Khách không biết sản phẩm tồn tại hay bị khóa
+GET {{baseUrl}}/products/{{createProductDraft.response.body.data.product_id}}
+Accept: application/json
+
+### [8.5] Admin - Mở khóa sản phẩm (Unblock Product: Chuyển về INACTIVE để Seller rà soát lại)
+POST {{baseUrl}}/admin/catalog/products/{{createProductDraft.response.body.data.product_id}}/unblock
+Accept: application/json
+x-user-id: {{adminId}}
+x-user-roles: {{adminRoles}}
+
+
+### ==============================================================================
+### PHẦN 9: BẢO MẬT PHÂN QUYỀN & CHỐNG TẤN CÔNG IDOR (SECURITY & TENANT ISOLATION)
+### ==============================================================================
+
+### [9.1] Khách không đăng nhập cố tình truy cập Seller API
+# Mong đợi: 401 Unauthorized (UNAUTHORIZED)
+GET {{baseUrl}}/seller/products
+Accept: application/json
+
+### [9.2] Người dùng có role BUYER (không có SELLER) truy cập Seller API
+# Mong đợi: 403 Forbidden (PRODUCT_FORBIDDEN)
+GET {{baseUrl}}/seller/products
+Accept: application/json
+x-user-id: usr-buyer-001
+x-user-roles: BUYER
+
+### [9.3] Tấn công IDOR: Seller B cố tình cập nhật sản phẩm của Seller A
+# Mong đợi: 404 Not Found (PRODUCT_NOT_FOUND) - Kẹp CAS shop_id chặn tuyệt đối không cho chạm vào shop khác
+PATCH {{baseUrl}}/seller/products/{{createProductDraft.response.body.data.product_id}}
+Content-Type: application/json
+Accept: application/json
+x-user-id: {{attackerId}}
+x-user-roles: {{attackerRoles}}
+x-user-shop-scope: {{attackerShopScope}}
+
+{
+  "version": 1,
+  "title": "Tấn công thay đổi tiêu đề trái phép"
+}
+
+### [9.4] Tấn công IDOR: Seller B cố tình xuất file Export của Seller A
+# Mong đợi: Chỉ xuất các sản phẩm thuộc về attackerShopScope, không leak bản ghi nào của Seller A
+GET {{baseUrl}}/seller/products/export
+Accept: application/json
+x-user-id: {{attackerId}}
+x-user-roles: {{attackerRoles}}
+x-user-shop-scope: {{attackerShopScope}}
+
+### [9.5] Shop bị đình chỉ (SUSPENDED): Cố tình xuất bản sản phẩm
+# Mong đợi: 403 Forbidden (PRODUCT_SHOP_SUSPENDED)
+POST {{baseUrl}}/seller/products/{{createProductDraft.response.body.data.product_id}}/publish
+Accept: application/json
+x-user-id: usr-suspended-seller
+x-user-roles: SELLER
+x-user-shop-scope: shop-suspended-id
