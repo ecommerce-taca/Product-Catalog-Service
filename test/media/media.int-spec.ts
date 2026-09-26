@@ -95,6 +95,17 @@ class InMemoryProductMediaRepository implements ProductMediaRepositoryPort {
     return this.findByProductId(productId);
   }
 
+  async findByProductIds(productIds: string[]): Promise<ProductMediaDocument[]> {
+    return Array.from(this.items.values())
+      .filter((m) => productIds.includes(m.product_id) && m.status !== MediaStatus.DELETED)
+      .sort((a, b) => {
+        if (a.sort_order !== b.sort_order) {
+          return a.sort_order - b.sort_order;
+        }
+        return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+      });
+  }
+
   async findByProductIdAndMediaId(
     productId: string,
     mediaId: string,
