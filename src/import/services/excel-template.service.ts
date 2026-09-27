@@ -165,6 +165,7 @@ export class ExcelTemplateService {
         bottom: { style: 'medium', color: { argb: 'FF4682B4' } },
         right: { style: 'thin', color: { argb: 'FFB0C4DE' } },
       };
+      cell.protection = { locked: true };
     });
 
     // Configure Data Validation dropdown list for ENUM attributes (rows 2 to 201)
@@ -192,6 +193,28 @@ export class ExcelTemplateService {
     // Configure number formats for price columns (columns 8 and 9)
     sheet1.getColumn(8).numFmt = '#,##0';
     sheet1.getColumn(9).numFmt = '#,##0';
+
+    // Configure cell protection and prefilling when categoryId is provided (PCAT-IMP-07)
+    if (categoryId) {
+      const totalColumns = columns.length;
+      for (let r = 2; r <= 201; r++) {
+        for (let c = 1; c <= totalColumns; c++) {
+          const cell = sheet1.getCell(r, c);
+          if (c === 3) {
+            cell.value = categoryId;
+            cell.protection = { locked: true };
+          } else {
+            cell.protection = { locked: false };
+          }
+        }
+      }
+
+      await sheet1.protect('', {
+        spinCount: 1,
+        selectLockedCells: true,
+        selectUnlockedCells: true,
+      });
+    }
 
     // -------------------------------------------------------------
     // SHEET 2: "Ví dụ điền mẫu" (Tab mẫu tham khảo trực quan cho Người bán)

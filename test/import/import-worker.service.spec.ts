@@ -281,9 +281,18 @@ describe('ImportWorkerService', () => {
         expect.anything(),
       );
 
-      // Verify Category and Media created
+      // Verify Stage 3 sequential order (PCAT-IMP-07): SPU -> Category -> SKU -> Media
       expect(mockProductCategoryRepository.create).toHaveBeenCalledTimes(1);
       expect(mockProductMediaRepository.create).toHaveBeenCalledTimes(1);
+
+      const productCallOrder = mockProductRepository.create.mock.invocationCallOrder[0];
+      const categoryCallOrder = mockProductCategoryRepository.create.mock.invocationCallOrder[0];
+      const skuCallOrder = mockSkuRepository.create.mock.invocationCallOrder[0];
+      const mediaCallOrder = mockProductMediaRepository.create.mock.invocationCallOrder[0];
+
+      expect(productCallOrder).toBeLessThan(categoryCallOrder);
+      expect(categoryCallOrder).toBeLessThan(skuCallOrder);
+      expect(skuCallOrder).toBeLessThan(mediaCallOrder);
 
       // Verify Outbox events recorded (1 product.created + 2 sku.created)
       expect(mockOutboxRepository.saveEvent).toHaveBeenCalledTimes(3);

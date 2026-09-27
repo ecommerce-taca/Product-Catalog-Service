@@ -652,7 +652,20 @@ export class ImportWorkerService {
               session,
             );
 
-            // 2. Insert SKUs (status: ACTIVE)
+            // 2. Insert primary product category (SPU Category binding - PCAT-IMP-07)
+            await this.productCategoryRepo.create(
+              {
+                _id: uuidv7(),
+                product_id: productId,
+                category_id: spu.categoryId,
+                is_primary: true,
+                assigned_at: new Date(),
+                assigned_by: job.actor_user_id || SYSTEM_ACTOR_ID,
+              },
+              session,
+            );
+
+            // 3. Insert SKUs (status: ACTIVE) and emit sku.created CDC events
             for (const sku of spu.skus) {
               const skuId = uuidv7();
               await this.skuRepo.create(
@@ -696,19 +709,6 @@ export class ImportWorkerService {
                 session,
               );
             }
-
-            // 3. Insert primary product category
-            await this.productCategoryRepo.create(
-              {
-                _id: uuidv7(),
-                product_id: productId,
-                category_id: spu.categoryId,
-                is_primary: true,
-                assigned_at: new Date(),
-                assigned_by: job.actor_user_id || SYSTEM_ACTOR_ID,
-              },
-              session,
-            );
 
             // 4. Insert downloaded media records (if any)
             let isFirst = true;

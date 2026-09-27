@@ -154,6 +154,10 @@ describe('ExcelTemplateService', () => {
       expect(sheet3).toBeDefined();
       expect(sheet3?.getRow(1).getCell(1).value).toBe('Mục / Trường dữ liệu');
       expect(sheet3?.views?.[0]?.state).toBe('frozen');
+
+      // Verify Sheet 1 without categoryId: no prefilled category, no worksheet protection
+      expect(sheet1?.getCell(2, 3).value).toBeFalsy();
+      expect((sheet1 as any)?.sheetProtection).toBeFalsy();
     });
 
     it('should generate template with dynamic attribute columns and dropdown validations when valid categoryId is provided (AC-IM-01)', async () => {
@@ -205,6 +209,16 @@ describe('ExcelTemplateService', () => {
       // Price columns should have VND number format
       expect(sheet1?.getCell(2, 8).numFmt).toBe('#,##0');
       expect(sheet1?.getCell(2, 9).numFmt).toBe('#,##0');
+
+      // Verify category_id prefilled and locked on Sheet 1 (PCAT-IMP-07)
+      expect(sheet1?.getCell(2, 3).value).toBe(sampleCategory._id);
+      expect(sheet1?.getCell(201, 3).value).toBe(sampleCategory._id);
+      // In Excel OpenXML, cells are locked by default unless explicitly unlocked with locked: false
+      expect(sheet1?.getCell(2, 3).protection?.locked).not.toBe(false);
+      expect(sheet1?.getCell(2, 1).protection?.locked).toBe(false);
+      expect(sheet1?.getCell(2, 2).protection?.locked).toBe(false);
+      expect(sheet1?.getCell(2, 4).protection?.locked).toBe(false);
+      expect((sheet1 as any)?.sheetProtection?.sheet).toBe(true);
     });
 
     it('should throw 400 PRODUCT_CATEGORY_INVALID when categoryId does not exist (AC-IM-03)', async () => {
