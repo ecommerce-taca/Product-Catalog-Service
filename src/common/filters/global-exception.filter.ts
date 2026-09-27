@@ -37,7 +37,11 @@ export class GlobalExceptionFilter implements ExceptionFilter {
       status = exception.getStatus();
       const res = exception.getResponse();
 
-      if (typeof res === 'string') {
+      if (status === HttpStatus.PAYLOAD_TOO_LARGE) {
+        status = HttpStatus.BAD_REQUEST;
+        code = 'PRODUCT_IMPORT_FILE_TOO_LARGE';
+        message = 'Dung lượng tệp vượt quá giới hạn tối đa 2MB.';
+      } else if (typeof res === 'string') {
         message = res;
         code = this.mapStatusToCode(status);
       } else if (typeof res === 'object' && res !== null) {
@@ -61,6 +65,10 @@ export class GlobalExceptionFilter implements ExceptionFilter {
           details = body.details as Array<Record<string, unknown>>;
         }
       }
+    } else if ((exception as { code?: string })?.code === 'LIMIT_FILE_SIZE') {
+      status = HttpStatus.BAD_REQUEST;
+      code = 'PRODUCT_IMPORT_FILE_TOO_LARGE';
+      message = 'Dung lượng tệp vượt quá giới hạn tối đa 2MB.';
     } else if (this.isMongoDuplicateError(exception)) {
       status = HttpStatus.CONFLICT;
       const mongoErr = exception as { keyPattern?: Record<string, number> };

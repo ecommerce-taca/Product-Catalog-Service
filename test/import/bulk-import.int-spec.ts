@@ -1776,7 +1776,7 @@ describe('Bulk Product Import Integration Spec [PCAT-IMP-05]', () => {
           row_index: 2,
           product_ref_id: ExcelFormulaSanitizer.sanitize('=cmd|"/C calc"!A0'),
           seller_sku: ExcelFormulaSanitizer.sanitize('+SKU-MALICIOUS'),
-          error_code: 'PRODUCT_INVALID_PRICE',
+          error_code: 'PRODUCT_PRICE_INVALID',
           error_message: ExcelFormulaSanitizer.sanitize('@SUM(A1:A10) Giá bán không hợp lệ'),
         },
       ];

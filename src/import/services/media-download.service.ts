@@ -2,7 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import * as crypto from 'crypto';
 import { v7 as uuidv7 } from 'uuid';
 import { S3StorageService } from '../../integrations/storage/s3-storage.service';
-import { isPrivateOrBlockedUrl } from '../utils/ssrf-validator.util';
+import { isPrivateOrBlockedUrl, isPrivateOrBlockedUrlAsync } from '../utils/ssrf-validator.util';
 
 export interface DownloadedMediaResult {
   mediaId: string;
@@ -39,8 +39,8 @@ export class MediaDownloadService {
   ): Promise<DownloadedMediaResult> {
     const trimmedUrl = imageUrl.trim();
 
-    // 1. SSRF prevention
-    if (isPrivateOrBlockedUrl(trimmedUrl)) {
+    // 1. SSRF prevention (Sync IP checks + Async DNS lookup - SEC-SSRF-01)
+    if (isPrivateOrBlockedUrl(trimmedUrl) || (await isPrivateOrBlockedUrlAsync(trimmedUrl))) {
       const err = new Error('URL không an toàn hoặc trỏ về địa chỉ nội bộ');
       (err as unknown as { code: string }).code = 'MEDIA_INVALID_URL_BLOCKED';
       throw err;

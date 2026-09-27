@@ -41,8 +41,8 @@
 @suspendedShopScope = 01912f20-8888-7000-8000-000000008888
 
 # Biến động thực thi (Các ID này sẽ được cập nhật tự động qua response hoặc điền thủ công)
-@categoryId = 01912f20-0000-7000-8000-000000000001
-@subCategoryId = 01912f20-0000-7000-8000-000000000002
+@categoryId = 01a0e15b-0f0c-719a-9b3c-93b5b033b85e
+@subCategoryId = 01a0e15b-98ca-7098-8671-75da8b312fc0
 @productId = 01912f30-0000-7000-8000-000000000001
 @skuId = 01912f40-0000-7000-8000-000000000001
 @mediaId = 01912f50-0000-7000-8000-000000000001
@@ -639,49 +639,85 @@ x-user-shop-scope: {{suspendedShopScope}}
 ### ==============================================================================
 ### PHẦN 10: NHẬP SẢN PHẨM HÀNG LOẠT (BULK PRODUCT IMPORT - SELLER)
 ### ==============================================================================
-
-### [10.1] Tải template mẫu mặc định (không truyền category_id)
-# Mong đợi: 200 OK kèm JSON chứa Presigned Download URL từ MinIO (hoặc binary nếu Accept: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet)
-GET {{baseUrl}}/seller/products/import/template
+### [10.1a] Tải template Excel - 1 Danh mục (Single-Sheet tiêu chuẩn, tự cấp sẵn 100 dòng format)
+# Mô tả: Người bán tải template cho 1 danh mục. Hệ thống tự cấp sẵn 100 dòng format viền, dropdown, cột Mã danh mục điền sẵn & khóa bảo vệ.
+# Mong đợi: 200 OK kèm JSON chứa Presigned Download URL
+# @name downloadTemplateSingleCat
+POST {{baseUrl}}/seller/products/import/template
+Content-Type: application/json
 Accept: application/json
 x-user-id: {{sellerId}}
 x-user-roles: {{sellerRoles}}
 x-user-shop-scope: {{sellerShopScope}}
 
-### [10.2] Tải template mẫu theo category_id hợp lệ (có dropdown validation cho ENUM)
-# Mong đợi: 200 OK kèm JSON chứa Presigned Download URL từ MinIO
-GET {{baseUrl}}/seller/products/import/template?category_id={{categoryId}}
+{
+  "category_ids": [
+    "{{categoryId}}"
+  ]
+}
+
+### [10.1b] Tải template Excel - Nhiều Danh mục (Multi-Sheet: Tự động chia mỗi danh mục 1 sheet riêng biệt)
+# Mô tả: Khi chọn nhiều category_ids (không cần chỉ định layout_mode), hệ thống TỰ ĐỘNG chuyển sang MULTI_SHEET mode.
+# Mỗi danh mục được tạo thành 1 tab sheet riêng mang tên danh mục đó (đã khử ký tự cấm, <= 31 ký tự),
+# sở hữu bộ thuộc tính động riêng biệt, cấp sẵn 100 dòng format và khóa cứng mã danh mục tương ứng tại cột 3.
+# Mong đợi: 200 OK kèm JSON chứa Presigned Download URL của file đa sheet
+# @name downloadTemplateMultiCat
+POST {{baseUrl}}/seller/products/import/template
+Content-Type: application/json
 Accept: application/json
 x-user-id: {{sellerId}}
 x-user-roles: {{sellerRoles}}
 x-user-shop-scope: {{sellerShopScope}}
 
-### [10.3] Tải template với category_id không tồn tại trong hệ thống
-# Mong đợi: 400 Bad Request (PRODUCT_CATEGORY_INVALID)
-GET {{baseUrl}}/seller/products/import/template?category_id=01912f20-9999-7000-8000-000000009999
+{
+  "category_ids": [
+    "{{categoryId}}",
+    "{{subCategoryId}}"
+  ]
+}
+
+### [10.1c] Tải template Excel - Nhiều Danh mục gộp chung 1 sheet có Dropdown (layout_mode: SINGLE_SHEET)
+# Mô tả: Người bán chọn nhiều danh mục nhưng muốn quản lý chung trên 1 sheet duy nhất.
+# Cột 3 "Mã danh mục (*)" có Data Validation Dropdown chứa các danh mục đã chọn để người bán chọn nhanh từng dòng.
+# Mong đợi: 200 OK
+# @name downloadTemplateMultiCatSingleSheet
+POST {{baseUrl}}/seller/products/import/template
+Content-Type: application/json
 Accept: application/json
 x-user-id: {{sellerId}}
 x-user-roles: {{sellerRoles}}
 x-user-shop-scope: {{sellerShopScope}}
 
-### [10.4] Shop bị đình chỉ (SUSPENDED): Tải template mẫu nạp sản phẩm
-# Mong đợi: 403 Forbidden (PRODUCT_SHOP_SUSPENDED)
-GET {{baseUrl}}/seller/products/import/template
-Accept: application/json
-x-user-id: {{suspendedSellerId}}
+{
+  "category_ids": [
+    "{{categoryId}}",
+    "{{subCategoryId}}"
+  ],
+  "layout_mode": "SINGLE_SHEET"
+}
+
+### [10.1d] Tải trực tiếp Binary stream (.xlsx) của template nhiều danh mục (Multi-Sheet)
+# Mô tả: Gửi header Accept yêu cầu binary stream để lưu file .xlsx trực tiếp
+# Mong đợi: 200 OK kèm binary stream application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+POST {{baseUrl}}/seller/products/import/template
+Content-Type: application/json
+Accept: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+x-user-id: {{sellerId}}
 x-user-roles: {{sellerRoles}}
-x-user-shop-scope: {{suspendedShopScope}}
+x-user-shop-scope: {{sellerShopScope}}
 
-### [10.5] Khách không đăng nhập: Tải template mẫu nạp sản phẩm
-# Mong đợi: 401 Unauthorized (UNAUTHORIZED)
-GET {{baseUrl}}/seller/products/import/template
-Accept: application/json
+{
+  "category_ids": [
+    "{{categoryId}}",
+    "{{subCategoryId}}"
+  ]
+}
 
-### [10.6a] Upload file Excel 100% hợp lệ (Valid Multi-variant, Single-variant & No-image SPUs) -> 202 Accepted
-# Mô tả: File 'sample-import-valid.xlsx' bao gồm 3 SPU (6 dòng SKU):
-# - SPU 1 (REF-AO-NAM-01): Đa biến thể (4 SKUs kết hợp Màu sắc & Kích cỡ), đầy đủ ảnh, giá, barcode
-# - SPU 2 (REF-BALO-01): Đơn biến thể (1 SKU Tiêu chuẩn)
-# - SPU 3 (REF-NON-01): Đơn biến thể không có ảnh (kiểm thử tạo DRAFT không ảnh bìa - AC-IM-12)
+### [10.6a] Upload file Excel 100% hợp lệ (sample-import-live.xlsx với SKU tươi mới) -> 202 Accepted
+# Mô tả: File 'sample-import-live.xlsx' bao gồm 3 SPU (6 dòng SKU):
+# - SPU 1 (REF-AO-NAM-*): Đa biến thể (4 SKUs kết hợp Màu sắc & Kích cỡ), đầy đủ ảnh, giá, barcode
+# - SPU 2 (REF-BALO-*): Đơn biến thể (1 SKU Tiêu chuẩn)
+# - SPU 3 (REF-NON-*): Đơn biến thể không có ảnh (kiểm thử tạo DRAFT không ảnh bìa - AC-IM-12)
 # Mong đợi: 202 Accepted (< 500ms), trả về job_id, status PENDING
 # @name uploadValidExcel
 POST {{baseUrl}}/seller/products/import
@@ -691,10 +727,10 @@ x-user-roles: {{sellerRoles}}
 x-user-shop-scope: {{sellerShopScope}}
 
 --WebAppBoundary
-Content-Disposition: form-data; name="file"; filename="sample-import-valid.xlsx"
+Content-Disposition: form-data; name="file"; filename="sample-import-live.xlsx"
 Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
 
-< ./test/fixtures/sample-import-valid.xlsx
+< ./test/fixtures/sample-import-live.xlsx
 --WebAppBoundary--
 
 ### [10.6b] Upload file Excel chứa lỗi nghiệp vụ & kiểm thử bảo mật (Partial Success & Error Cases) -> 202 Accepted
@@ -731,6 +767,27 @@ Content-Disposition: form-data; name="file"; filename="sample-import.xlsx"
 Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
 
 < ./test/fixtures/sample-import.xlsx
+--WebAppBoundary--
+
+### [10.6d] Upload file Excel nhiều Sheet danh mục (sample-import-multisheet.xlsx) -> 202 Accepted
+# Mô tả: File 'sample-import-multisheet.xlsx' gồm 4 sheets:
+# - Sheet 1: 'Thời Trang Nam' chứa SPU REF-POLO-MULTI (2 biến thể Đen-M, Đen-L)
+# - Sheet 2: 'Áo Khoác Nam' chứa SPU REF-KHOAC-MULTI (1 biến thể Navy-L)
+# - Sheet 3: 'Ví dụ điền mẫu' (tự động bỏ qua an toàn)
+# - Sheet 4: 'Hướng dẫn & Danh mục' (tự động bỏ qua an toàn)
+# Mong đợi: 202 Accepted (< 500ms), trả về job_id, status PENDING. Worker nạp 2 SPUs vào 2 danh mục độc lập.
+# @name uploadMultiSheetExcel
+POST {{baseUrl}}/seller/products/import
+Content-Type: multipart/form-data; boundary=WebAppBoundary
+x-user-id: {{sellerId}}
+x-user-roles: {{sellerRoles}}
+x-user-shop-scope: {{sellerShopScope}}
+
+--WebAppBoundary
+Content-Disposition: form-data; name="file"; filename="sample-import-multisheet.xlsx"
+Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+
+< ./test/fixtures/sample-import-multisheet.xlsx
 --WebAppBoundary--
 
 ### [10.7] Upload file vượt quá 2MB -> 400 Bad Request (PRODUCT_IMPORT_FILE_TOO_LARGE)
@@ -796,6 +853,14 @@ Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
 ### [10.11] Tra cứu tiến độ import job theo thời gian thực (AC-IM-16)
 # Mong đợi: 200 OK kèm body tiến độ { job_id, status, total_rows, processed_rows, success_count, error_count }
 GET {{baseUrl}}/seller/products/import/jobs/{{importJobId}}
+Accept: application/json
+x-user-id: {{sellerId}}
+x-user-roles: {{sellerRoles}}
+x-user-shop-scope: {{sellerShopScope}}
+
+### [10.11b] Tra cứu tiến độ import job vừa upload từ file nhiều sheet (uploadMultiSheetExcel)
+# Tự động lấy job_id từ request [10.6d] mà không cần copy paste thủ công
+GET {{baseUrl}}/seller/products/import/jobs/{{uploadMultiSheetExcel.response.body.data.job_id}}
 Accept: application/json
 x-user-id: {{sellerId}}
 x-user-roles: {{sellerRoles}}

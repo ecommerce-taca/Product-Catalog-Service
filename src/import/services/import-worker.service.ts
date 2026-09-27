@@ -29,6 +29,7 @@ import { ExcelResultService } from './excel-result.service';
 
 const SYSTEM_ACTOR_ID = '01910000-0000-7000-8000-000000000000';
 const GLOBAL_MAX_CONCURRENT_WORKERS = 3;
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const STRICT_SANITIZE_OPTIONS: sanitizeHtml.IOptions = {
   allowedTags: ['p', 'br', 'strong', 'em', 'b', 'i', 'u', 'ul', 'ol', 'li', 'h3', 'h4', 'a', 'img'],
@@ -71,6 +72,7 @@ async function runWithConcurrency<T, R>(
 
 interface ParsedSkuRow {
   rowIndex: number;
+  sheetName?: string;
   productRefId: string;
   sellerSku: string;
   price: number;
@@ -84,6 +86,8 @@ interface ParsedSkuRow {
 interface ParsedSpuGroup {
   productRefId: string;
   firstRowIndex: number;
+  sheetName?: string;
+  assignedProductId?: string;
   title: string;
   categoryId: string;
   description: string | null;
@@ -92,6 +96,8 @@ interface ParsedSpuGroup {
   skus: ParsedSkuRow[];
   spuErrors: ImportErrorDetail[];
   downloadedMedia: DownloadedMediaResult[];
+  isExistingSpu?: boolean;
+  existingProduct?: any;
 }
 
 @Injectable()
@@ -240,8 +246,12 @@ export class ImportWorkerService {
       return;
     }
 
-    const worksheet = workbook.getWorksheet('Sản phẩm & Biến thể') || workbook.getWorksheet(1);
-    if (!worksheet) {
+    const IGNORE_SHEET_REGEX = /hướng dẫn|ví dụ|guide|example/i;
+    const dataSheets = (workbook.worksheets || []).filter(
+      (ws) => !IGNORE_SHEET_REGEX.test(ws.name),
+    );
+
+    if (dataSheets.length === 0) {
       job.status = ImportJobStatus.FAILED;
       job.completed_at = new Date();
       job.locked_until = null;
@@ -258,12 +268,14 @@ export class ImportWorkerService {
       return;
     }
 
-    // Map column headers from Row 1
-    const headerRow = worksheet.getRow(1);
-    const colMap = this.mapHeaderColumns(headerRow);
-
-    // Read all non-empty data rows from Row 2
-    const rawRows = this.extractDataRows(worksheet, colMap);
+    // Read all non-empty data rows across all valid data sheets
+    const rawRows: Array<any> = [];
+    for (const ws of dataSheets) {
+      const headerRow = ws.getRow(1);
+      const colMap = this.mapHeaderColumns(headerRow);
+      const sheetRows = this.extractDataRows(ws, colMap);
+      rawRows.push(...sheetRows);
+    }
 
     if (rawRows.length === 0) {
       job.status = ImportJobStatus.FAILED;
@@ -329,6 +341,7 @@ export class ImportWorkerService {
         spuMap.set(refKey, {
           productRefId: r.productRefId || refKey,
           firstRowIndex: r.rowIndex,
+          sheetName: r.sheetName,
           title: r.title,
           categoryId: r.categoryId,
           description: r.description,
@@ -355,6 +368,7 @@ export class ImportWorkerService {
       if (!r.sellerSku) {
         rowErrors.push({
           row_index: r.rowIndex,
+          sheet_name: r.sheetName,
           product_ref_id: spu.productRefId,
           seller_sku: undefined,
           error_code: 'PRODUCT_INVALID_INPUT',
@@ -363,6 +377,7 @@ export class ImportWorkerService {
       } else if (r.sellerSku.length > 64) {
         rowErrors.push({
           row_index: r.rowIndex,
+          sheet_name: r.sheetName,
           product_ref_id: spu.productRefId,
           seller_sku: r.sellerSku,
           error_code: 'PRODUCT_INVALID_INPUT',
@@ -371,6 +386,7 @@ export class ImportWorkerService {
       } else if (duplicateSellerSkusInFile.has(r.sellerSku.toLowerCase())) {
         rowErrors.push({
           row_index: r.rowIndex,
+          sheet_name: r.sheetName,
           product_ref_id: spu.productRefId,
           seller_sku: r.sellerSku,
           error_code: 'PRODUCT_SKU_DUPLICATE',
@@ -378,39 +394,43 @@ export class ImportWorkerService {
         });
       }
 
-      // Validate price
+      // Validate price (must be integer VND, 1.000 to 999.999.999.999)
       if (
         r.price === null ||
         r.price === undefined ||
         isNaN(r.price) ||
+        !Number.isInteger(r.price) ||
         r.price < 1000 ||
         r.price > 999_999_999_999
       ) {
         rowErrors.push({
           row_index: r.rowIndex,
+          sheet_name: r.sheetName,
           product_ref_id: spu.productRefId,
           seller_sku: r.sellerSku || undefined,
-          error_code: 'PRODUCT_INVALID_PRICE',
+          error_code: 'PRODUCT_PRICE_INVALID',
           error_message: 'Giá bán phải là số nguyên dương từ 1.000 đến 999.999.999.999 VND.',
         });
       }
 
       // Validate original_price
       if (r.originalPrice !== null && r.originalPrice !== undefined && !isNaN(r.originalPrice)) {
-        if (r.originalPrice < 0) {
+        if (r.originalPrice < 0 || !Number.isInteger(r.originalPrice)) {
           rowErrors.push({
             row_index: r.rowIndex,
+            sheet_name: r.sheetName,
             product_ref_id: spu.productRefId,
             seller_sku: r.sellerSku || undefined,
-            error_code: 'PRODUCT_INVALID_PRICE',
-            error_message: 'Giá niêm yết gốc phải là số dương.',
+            error_code: 'PRODUCT_PRICE_INVALID',
+            error_message: 'Giá niêm yết gốc phải là số nguyên dương.',
           });
         } else if (r.price && r.originalPrice < r.price) {
           rowErrors.push({
             row_index: r.rowIndex,
+            sheet_name: r.sheetName,
             product_ref_id: spu.productRefId,
             seller_sku: r.sellerSku || undefined,
-            error_code: 'PRODUCT_INVALID_PRICE',
+            error_code: 'PRODUCT_PRICE_INVALID',
             error_message: 'Giá niêm yết gốc phải lớn hơn hoặc bằng giá bán.',
           });
         }
@@ -421,6 +441,7 @@ export class ImportWorkerService {
 
       spu.skus.push({
         rowIndex: r.rowIndex,
+        sheetName: r.sheetName,
         productRefId: spu.productRefId,
         sellerSku: r.sellerSku,
         price: r.price,
@@ -452,20 +473,53 @@ export class ImportWorkerService {
       return;
     }
 
+    // Check for existing SPU if productRefId is a valid UUID
+    for (const spu of spuMap.values()) {
+      if (UUID_REGEX.test(spu.productRefId)) {
+        try {
+          const existingProduct = await this.productRepo.findById(spu.productRefId);
+          if (existingProduct && existingProduct.shop_id === job.shop_id) {
+            spu.isExistingSpu = true;
+            spu.existingProduct = existingProduct;
+            if ((!spu.title || !spu.title.trim()) && existingProduct.title) {
+              spu.title = existingProduct.title;
+            }
+            if (
+              (!spu.categoryId || !spu.categoryId.trim()) &&
+              existingProduct.primary_category_id
+            ) {
+              spu.categoryId = existingProduct.primary_category_id;
+            }
+            if ((!spu.description || !spu.description.trim()) && existingProduct.description) {
+              spu.description = existingProduct.description;
+            }
+            if ((!spu.brand || !spu.brand.trim()) && existingProduct.brand) {
+              spu.brand = existingProduct.brand;
+            }
+          }
+        } catch (err: unknown) {
+          this.logger.warn(`Failed to check existing SPU for ${spu.productRefId}: ${err}`);
+        }
+      }
+      spu.assignedProductId = spu.isExistingSpu ? spu.productRefId : uuidv7();
+    }
+
     // SPU-level validation and in-SPU duplicate variant detection (AC-IM-10)
     for (const spu of spuMap.values()) {
-      if (!spu.title || spu.title.trim().length < 10 || spu.title.trim().length > 255) {
+      if (!spu.title || spu.title.trim().length < 10 || spu.title.trim().length > 200) {
         spu.spuErrors.push({
           row_index: spu.firstRowIndex,
+          sheet_name: spu.sheetName,
           product_ref_id: spu.productRefId,
           error_code: 'PRODUCT_INVALID_INPUT',
-          error_message: 'Tiêu đề sản phẩm bắt buộc từ 10 đến 255 ký tự.',
+          error_message: 'Tiêu đề sản phẩm bắt buộc từ 10 đến 200 ký tự.',
         });
       }
 
       if (!spu.categoryId || !spu.categoryId.trim()) {
         spu.spuErrors.push({
           row_index: spu.firstRowIndex,
+          sheet_name: spu.sheetName,
           product_ref_id: spu.productRefId,
           error_code: 'PRODUCT_CATEGORY_INVALID',
           error_message: 'Mã danh mục không được để trống.',
@@ -478,6 +532,7 @@ export class ImportWorkerService {
         if (sku.variantKey && seenVariantKeys.has(sku.variantKey)) {
           sku.rowErrors.push({
             row_index: sku.rowIndex,
+            sheet_name: sku.sheetName,
             product_ref_id: spu.productRefId,
             seller_sku: sku.sellerSku || undefined,
             error_code: 'PRODUCT_SKU_DUPLICATE_VARIANT',
@@ -512,6 +567,7 @@ export class ImportWorkerService {
       if (spu.categoryId && !validCategoryMap.get(spu.categoryId.trim())) {
         spu.spuErrors.push({
           row_index: spu.firstRowIndex,
+          sheet_name: spu.sheetName,
           product_ref_id: spu.productRefId,
           error_code: 'PRODUCT_CATEGORY_INVALID',
           error_message: `Danh mục '${spu.categoryId}' không tồn tại hoặc không ở trạng thái ACTIVE.`,
@@ -538,6 +594,7 @@ export class ImportWorkerService {
           if (sku.sellerSku && existingSellerSkuSet.has(sku.sellerSku.toLowerCase())) {
             sku.rowErrors.push({
               row_index: sku.rowIndex,
+              sheet_name: sku.sheetName,
               product_ref_id: spu.productRefId,
               seller_sku: sku.sellerSku,
               error_code: 'PRODUCT_SKU_DUPLICATE',
@@ -559,13 +616,15 @@ export class ImportWorkerService {
     });
 
     for (const spu of spusToProbeMedia) {
-      const tempProductId = uuidv7();
+      const assignedProductId =
+        spu.assignedProductId || (spu.isExistingSpu ? spu.productRefId : uuidv7());
+      spu.assignedProductId = assignedProductId;
 
       await runWithConcurrency(spu.imageUrls.slice(0, 5), 5, async (url) => {
         try {
           const downloaded = await this.mediaDownloadService.downloadAndUploadImage(
             url,
-            tempProductId,
+            assignedProductId,
           );
           spu.downloadedMedia.push(downloaded);
         } catch (err: unknown) {
@@ -582,6 +641,7 @@ export class ImportWorkerService {
           // Fault-tolerance (AC-IM-12): Record warning, DO NOT fail SPU!
           mediaWarningDetails.push({
             row_index: spu.firstRowIndex,
+            sheet_name: spu.sheetName,
             product_ref_id: spu.productRefId,
             error_code: errorCode,
             error_message: errorMsg,
@@ -613,7 +673,8 @@ export class ImportWorkerService {
       try {
         await this.transactionRunner.execute(async (session) => {
           for (const spu of validSpus) {
-            const productId = uuidv7();
+            const productId =
+              spu.assignedProductId || (spu.isExistingSpu ? spu.productRefId : uuidv7());
             const cleanTitle = spu.title.trim();
             const slug = generateImportSlug(cleanTitle, productId);
             const sanitizedDesc = spu.description
@@ -628,42 +689,44 @@ export class ImportWorkerService {
               currency: 'VND',
             };
 
-            // 1. Insert product (100% DRAFT - BR-IM-03, AC-IM-15)
-            await this.productRepo.create(
-              {
-                _id: productId,
-                shop_id: job.shop_id,
-                title: cleanTitle,
-                slug,
-                description: sanitizedDesc,
-                brand: spu.brand || null,
-                price_summary: priceSummary,
-                status: ProductStatus.DRAFT,
-                primary_category_id: spu.categoryId,
-                shop_snapshot: null,
-                rating_summary: null,
-                published_at: null,
-                unpublished_at: null,
-                archived_at: null,
-                blocked_at: null,
-                block_reason: null,
-                version: BigInt(1),
-              },
-              session,
-            );
+            if (!spu.isExistingSpu) {
+              // 1. Insert product (100% DRAFT - BR-IM-03, AC-IM-15)
+              await this.productRepo.create(
+                {
+                  _id: productId,
+                  shop_id: job.shop_id,
+                  title: cleanTitle,
+                  slug,
+                  description: sanitizedDesc,
+                  brand: spu.brand || null,
+                  price_summary: priceSummary,
+                  status: ProductStatus.DRAFT,
+                  primary_category_id: spu.categoryId,
+                  shop_snapshot: null,
+                  rating_summary: null,
+                  published_at: null,
+                  unpublished_at: null,
+                  archived_at: null,
+                  blocked_at: null,
+                  block_reason: null,
+                  version: BigInt(1),
+                },
+                session,
+              );
 
-            // 2. Insert primary product category (SPU Category binding - PCAT-IMP-07)
-            await this.productCategoryRepo.create(
-              {
-                _id: uuidv7(),
-                product_id: productId,
-                category_id: spu.categoryId,
-                is_primary: true,
-                assigned_at: new Date(),
-                assigned_by: job.actor_user_id || SYSTEM_ACTOR_ID,
-              },
-              session,
-            );
+              // 2. Insert primary product category (SPU Category binding - PCAT-IMP-07)
+              await this.productCategoryRepo.create(
+                {
+                  _id: uuidv7(),
+                  product_id: productId,
+                  category_id: spu.categoryId,
+                  is_primary: true,
+                  assigned_at: new Date(),
+                  assigned_by: job.actor_user_id || SYSTEM_ACTOR_ID,
+                },
+                session,
+              );
+            }
 
             // 3. Insert SKUs (status: ACTIVE) and emit sku.created CDC events
             for (const sku of spu.skus) {
@@ -734,29 +797,31 @@ export class ImportWorkerService {
             }
 
             // 5. Outbox event for Product (product.created CDC)
-            await this.outboxRepo.saveEvent(
-              {
-                _id: uuidv7(),
-                event_id: uuidv7(),
-                aggregate_type: AggregateType.PRODUCT,
-                aggregate_id: productId,
-                event_type: 'product.created',
-                schema_version: 1,
-                payload: {
-                  product_id: productId,
-                  shop_id: job.shop_id,
-                  slug,
-                  title: cleanTitle,
-                  status: ProductStatus.DRAFT,
-                  version: 1,
+            if (!spu.isExistingSpu) {
+              await this.outboxRepo.saveEvent(
+                {
+                  _id: uuidv7(),
+                  event_id: uuidv7(),
+                  aggregate_type: AggregateType.PRODUCT,
+                  aggregate_id: productId,
+                  event_type: 'product.created',
+                  schema_version: 1,
+                  payload: {
+                    product_id: productId,
+                    shop_id: job.shop_id,
+                    slug,
+                    title: cleanTitle,
+                    status: ProductStatus.DRAFT,
+                    version: 1,
+                  },
+                  topic: 'product.events.v1',
+                  version: BigInt(1),
+                  actor_user_id: job.actor_user_id || null,
+                  traceparent: TraceContextStorage.getTraceparent() || null,
                 },
-                topic: 'product.events.v1',
-                version: BigInt(1),
-                actor_user_id: job.actor_user_id || null,
-                traceparent: TraceContextStorage.getTraceparent() || null,
-              },
-              session,
-            );
+                session,
+              );
+            }
           }
         });
       } catch (err: unknown) {
@@ -787,13 +852,19 @@ export class ImportWorkerService {
     // Combine error details and media warnings (sanitized against Formula Injection CWE-1236)
     const combinedErrorSummary = [...errorDetails, ...mediaWarningDetails].map((err) => ({
       row_index: err.row_index,
+      sheet_name: err.sheet_name,
       product_ref_id: ExcelFormulaSanitizer.sanitize(err.product_ref_id),
       seller_sku: err.seller_sku ? ExcelFormulaSanitizer.sanitize(err.seller_sku) : undefined,
       error_code: err.error_code,
       error_message: ExcelFormulaSanitizer.sanitize(err.error_message),
     }));
 
-    combinedErrorSummary.sort((a, b) => a.row_index - b.row_index);
+    combinedErrorSummary.sort((a, b) => {
+      if (a.sheet_name && b.sheet_name && a.sheet_name !== b.sheet_name) {
+        return a.sheet_name.localeCompare(b.sheet_name);
+      }
+      return a.row_index - b.row_index;
+    });
 
     // Total failed SKU rows
     const failedSkuRowsCount =
@@ -888,6 +959,7 @@ export class ImportWorkerService {
     colMap: Map<string, number>,
   ): Array<{
     rowIndex: number;
+    sheetName: string;
     productRefId: string;
     title: string;
     categoryId: string;
@@ -945,11 +1017,25 @@ export class ImportWorkerService {
         }
       }
 
+      // Extract friendly [UUID] from categoryId and productRefId
+      let trimmedCatId = categoryId.trim();
+      const catMatch = trimmedCatId.match(/\[([0-9a-fA-F-]{36})\]/);
+      if (catMatch) {
+        trimmedCatId = catMatch[1];
+      }
+
+      let trimmedProductRefId = productRefId.trim();
+      const refMatch = trimmedProductRefId.match(/\[([0-9a-fA-F-]{36})\]/);
+      if (refMatch) {
+        trimmedProductRefId = refMatch[1];
+      }
+
       rawRows.push({
         rowIndex: rowNumber,
-        productRefId: productRefId.trim(),
+        sheetName: worksheet.name,
+        productRefId: trimmedProductRefId,
         title: title.trim(),
-        categoryId: categoryId.trim(),
+        categoryId: trimmedCatId,
         description: description.trim(),
         brand: brand.trim(),
         imageUrls,

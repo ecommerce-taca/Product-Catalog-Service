@@ -1,32 +1,75 @@
+import 'reflect-metadata';
 import { validate } from 'class-validator';
-import { ImportTemplateQueryDto } from '../../src/import/dto/import-template-query.dto';
+import {
+  GenerateCustomTemplateDto,
+  TemplateLayoutMode,
+} from '../../src/import/dto/generate-custom-template.dto';
 import { ImportJobResponseDto } from '../../src/import/dto/import-job-response.dto';
 import { ImportJobStatus, ImportJobDocument } from '../../src/database/schemas/import-job.schema';
 
 describe('Import DTOs', () => {
-  describe('ImportTemplateQueryDto', () => {
-    it('should validate valid UUID category_id', async () => {
-      const dto = new ImportTemplateQueryDto();
-      dto.category_id = '01912f30-7a1b-7c12-9c55-8b1c34a6d920';
+  describe('GenerateCustomTemplateDto', () => {
+    it('should validate empty DTO successfully', async () => {
+      const dto = new GenerateCustomTemplateDto();
 
       const errors = await validate(dto);
       expect(errors.length).toBe(0);
     });
 
-    it('should allow optional category_id when not provided', async () => {
-      const dto = new ImportTemplateQueryDto();
+    it('should validate valid customized options', async () => {
+      const dto = new GenerateCustomTemplateDto();
+      dto.row_count = 50;
+      dto.category_ids = ['01912f30-7a1b-7c12-9c55-8b1c34a6d920'];
+      dto.product_ids = ['01912f30-7a1b-7c12-9c55-8b1c34a6d921'];
+      dto.layout_mode = TemplateLayoutMode.MULTI_SHEET;
 
       const errors = await validate(dto);
       expect(errors.length).toBe(0);
     });
 
-    it('should reject invalid UUID category_id', async () => {
-      const dto = new ImportTemplateQueryDto();
-      dto.category_id = 'invalid-uuid';
+    it('should reject row_count less than 5', async () => {
+      const dto = new GenerateCustomTemplateDto();
+      dto.row_count = 4;
+
+      const errors = await validate(dto);
+      expect(errors.length).toBeGreaterThan(0);
+      expect(errors[0].constraints?.min).toBeDefined();
+    });
+
+    it('should reject row_count greater than 200', async () => {
+      const dto = new GenerateCustomTemplateDto();
+      dto.row_count = 201;
+
+      const errors = await validate(dto);
+      expect(errors.length).toBeGreaterThan(0);
+      expect(errors[0].constraints?.max).toBeDefined();
+    });
+
+    it('should reject invalid UUID in category_ids', async () => {
+      const dto = new GenerateCustomTemplateDto();
+      dto.category_ids = ['invalid-uuid'];
 
       const errors = await validate(dto);
       expect(errors.length).toBeGreaterThan(0);
       expect(errors[0].constraints?.isUuid).toBeDefined();
+    });
+
+    it('should reject invalid UUID in product_ids', async () => {
+      const dto = new GenerateCustomTemplateDto();
+      dto.product_ids = ['invalid-uuid'];
+
+      const errors = await validate(dto);
+      expect(errors.length).toBeGreaterThan(0);
+      expect(errors[0].constraints?.isUuid).toBeDefined();
+    });
+
+    it('should reject invalid layout_mode', async () => {
+      const dto = new GenerateCustomTemplateDto();
+      dto.layout_mode = 'INVALID_MODE' as unknown as TemplateLayoutMode;
+
+      const errors = await validate(dto);
+      expect(errors.length).toBeGreaterThan(0);
+      expect(errors[0].constraints?.isEnum).toBeDefined();
     });
   });
 

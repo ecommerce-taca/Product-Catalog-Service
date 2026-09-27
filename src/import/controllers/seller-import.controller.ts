@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  Body,
   ConflictException,
   Controller,
   ForbiddenException,
@@ -22,6 +23,8 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { Request, Response } from 'express';
 import { v7 as uuidv7 } from 'uuid';
 
+import { GenerateCustomTemplateDto } from '../dto/generate-custom-template.dto';
+
 import { Roles } from '../../common/decorators/roles.decorator';
 import { ShopScope } from '../../common/decorators/shop-scope.decorator';
 import { Actor } from '../../common/decorators/actor.decorator';
@@ -40,7 +43,6 @@ import { ImportJobRepositoryPort } from '../repositories/import-job.repository.i
 import { ExcelTemplateService } from '../services/excel-template.service';
 import { ImportWorkerService } from '../services/import-worker.service';
 import { ExcelResultService } from '../services/excel-result.service';
-import { ImportTemplateQueryDto } from '../dto/import-template-query.dto';
 import {
   ImportJobCreatedResponseDto,
   ImportJobResponseDto,
@@ -77,20 +79,55 @@ export class SellerImportController {
   ) {}
 
   /**
-   * Downloads an Excel template (.xlsx) for bulk product import (FR-IM-01).
-   * Checks MinIO cache first; initializes and uploads if not yet present.
+   * Generates or retrieves an Excel template (.xlsx) for bulk product import (FR-IM-01).
+   * Supports custom row count, layout mode, category filter, and product pre-population.
    * By default, returns a JSON envelope containing the Presigned Download URL.
    * If client explicitly requests binary stream (via Accept header), streams the file.
    * Enforces shop status check: SUSPENDED shops are rejected with 403 PRODUCT_SHOP_SUSPENDED (BR-IM-01).
    */
-  @Get('template')
+  /**
+   * Generates an Excel template (.xlsx) for bulk product import (FR-IM-01) with custom filters.
+   * By default, returns a JSON envelope containing the Presigned Download URL.
+   * If client explicitly requests binary stream (via Accept header), streams the file.
+   * Enforces shop status check: SUSPENDED shops are rejected with 403 PRODUCT_SHOP_SUSPENDED (BR-IM-01).
+   */
+  @Post('template')
   @SkipEnvelope()
   async downloadTemplate(
-    @Query() query: ImportTemplateQueryDto,
+    @Body() dto: GenerateCustomTemplateDto,
     @ShopScope() shopScope: string,
     @Actor() actor: ActorContext,
     @Res() res: Response,
     @Req() req?: Request,
+  ): Promise<void> {
+    return this.handleTemplateDownload(dto, shopScope, actor, res, req);
+  }
+
+  /**
+   * Backward-compatible GET endpoint for template download.
+   */
+  @Get('template')
+  @SkipEnvelope()
+  async downloadTemplateLegacy(
+    @Query('category_id') categoryId: string,
+    @ShopScope() shopScope: string,
+    @Actor() actor: ActorContext,
+    @Res() res: Response,
+    @Req() req?: Request,
+  ): Promise<void> {
+    const dto = new GenerateCustomTemplateDto();
+    if (categoryId) {
+      dto.category_ids = [categoryId];
+    }
+    return this.handleTemplateDownload(dto, shopScope, actor, res, req);
+  }
+
+  private async handleTemplateDownload(
+    dto: GenerateCustomTemplateDto = {},
+    shopScope: string,
+    actor: ActorContext,
+    res: Response,
+    req?: Request,
   ): Promise<void> {
     const actorShopScope = shopScope || actor?.shopScope;
     if (!actorShopScope) {
@@ -112,7 +149,7 @@ export class SellerImportController {
       });
     }
 
-    const templateResult = await this.excelTemplateService.getOrInitTemplate(query.category_id);
+    const templateResult = await this.excelTemplateService.getOrInitTemplate(dto, actorShopScope);
 
     const acceptHeader = (req?.headers?.accept || '').toLowerCase();
     const wantsBinary =
@@ -120,7 +157,7 @@ export class SellerImportController {
       acceptHeader.includes('application/octet-stream');
 
     if (wantsBinary) {
-      const buffer = await this.excelTemplateService.generateTemplate(query.category_id);
+      const buffer = await this.excelTemplateService.generateTemplate(dto, actorShopScope);
       res.set({
         'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
         'Content-Disposition': `attachment; filename="${templateResult.filename}"`,
@@ -155,7 +192,7 @@ export class SellerImportController {
    */
   @Post()
   @HttpCode(HttpStatus.ACCEPTED)
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_FILE_SIZE_BYTES } }))
   async uploadImportFile(
     @UploadedFile() file: UploadedFilePayload,
     @ShopScope() shopScope: string,
