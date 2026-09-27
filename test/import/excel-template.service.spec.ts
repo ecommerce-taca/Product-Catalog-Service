@@ -93,7 +93,7 @@ describe('ExcelTemplateService', () => {
   });
 
   describe('generateTemplate', () => {
-    it('should generate default template with 2 sheets and 10 fixed columns when no categoryId is provided', async () => {
+    it('should generate default template with 3 sheets (including Ví dụ điền mẫu) and 10 fixed columns when no categoryId is provided', async () => {
       mockCategoryRepository.findAllPaginated.mockResolvedValue({
         items: [sampleCategory],
         total: 1,
@@ -110,7 +110,7 @@ describe('ExcelTemplateService', () => {
       }
       await (workbook.xlsx as unknown as ExcelReader).load(buffer);
 
-      expect(workbook.worksheets.length).toBe(2);
+      expect(workbook.worksheets.length).toBe(3);
 
       const sheet1 = workbook.getWorksheet('Sản phẩm & Biến thể');
       expect(sheet1).toBeDefined();
@@ -141,11 +141,19 @@ describe('ExcelTemplateService', () => {
       expect(view?.state).toBe('frozen');
       expect(view?.ySplit).toBe(1);
 
-      // Verify Sheet 2
-      const sheet2 = workbook.getWorksheet('Hướng dẫn & Danh mục');
-      expect(sheet2).toBeDefined();
-      expect(sheet2?.getRow(1).getCell(1).value).toBe('Mục / Trường dữ liệu');
-      expect(sheet2?.views?.[0]?.state).toBe('frozen');
+      // Verify Sheet 2: Ví dụ điền mẫu
+      const sheetExample = workbook.getWorksheet('Ví dụ điền mẫu');
+      expect(sheetExample).toBeDefined();
+      expect(sheetExample?.columnCount).toBe(10);
+      expect(sheetExample?.rowCount).toBe(5); // 1 header + 4 example data rows
+      expect(sheetExample?.getRow(2).getCell(1).value).toBe('AO-THUN-NAM-01');
+      expect(sheetExample?.views?.[0]?.state).toBe('frozen');
+
+      // Verify Sheet 3: Hướng dẫn & Danh mục
+      const sheet3 = workbook.getWorksheet('Hướng dẫn & Danh mục');
+      expect(sheet3).toBeDefined();
+      expect(sheet3?.getRow(1).getCell(1).value).toBe('Mục / Trường dữ liệu');
+      expect(sheet3?.views?.[0]?.state).toBe('frozen');
     });
 
     it('should generate template with dynamic attribute columns and dropdown validations when valid categoryId is provided (AC-IM-01)', async () => {
@@ -164,9 +172,14 @@ describe('ExcelTemplateService', () => {
         load(data: unknown): Promise<ExcelJS.Workbook>;
       }
       await (workbook.xlsx as unknown as ExcelReader).load(buffer);
+      expect(workbook.worksheets.length).toBe(3);
 
       const sheet1 = workbook.getWorksheet('Sản phẩm & Biến thể');
       expect(sheet1).toBeDefined();
+
+      const sheetExample = workbook.getWorksheet('Ví dụ điền mẫu');
+      expect(sheetExample).toBeDefined();
+      expect(sheetExample?.columnCount).toBe(13);
 
       // 10 fixed + 3 dynamic = 13 columns
       expect(sheet1?.columnCount).toBe(13);

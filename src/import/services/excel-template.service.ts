@@ -79,7 +79,8 @@ export class ExcelTemplateService {
    * Generates a dynamic Excel workbook template for bulk product import.
    * If categoryId is supplied, validates that category is ACTIVE and attaches its dynamic attributes.
    * Sheet 1: "Sản phẩm & Biến thể" (Fixed SPU/SKU columns + dynamic attribute columns with enum dropdowns).
-   * Sheet 2: "Hướng dẫn & Danh mục" (Import rules, VND price rules, and active category references).
+   * Sheet 2: "Ví dụ điền mẫu" (Pre-filled realistic examples for SPU multi-SKU variants and single products).
+   * Sheet 3: "Hướng dẫn & Danh mục" (Import rules, VND price rules, and active category references).
    */
   async generateTemplate(categoryId?: string): Promise<Buffer> {
     let attributeDefinitions: AttributeDefinitionDocument[] = [];
@@ -193,7 +194,131 @@ export class ExcelTemplateService {
     sheet1.getColumn(9).numFmt = '#,##0';
 
     // -------------------------------------------------------------
-    // SHEET 2: "Hướng dẫn & Danh mục"
+    // SHEET 2: "Ví dụ điền mẫu" (Tab mẫu tham khảo trực quan cho Người bán)
+    // -------------------------------------------------------------
+    const sheetExample = workbook.addWorksheet('Ví dụ điền mẫu', {
+      views: [{ state: 'frozen', ySplit: 1 }],
+    });
+
+    sheetExample.columns = columns.map((col) => ({ ...col }));
+
+    const exampleHeaderRow = sheetExample.getRow(1);
+    exampleHeaderRow.height = 30;
+    exampleHeaderRow.eachCell((cell) => {
+      cell.font = {
+        name: 'Calibri',
+        size: 11,
+        bold: true,
+        color: { argb: 'FF000000' },
+      };
+      cell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FFE2EFDA' }, // Soft green to distinguish as sample/reference
+      };
+      cell.alignment = {
+        vertical: 'middle',
+        horizontal: 'center',
+        wrapText: true,
+      };
+      cell.border = {
+        top: { style: 'thin', color: { argb: 'FFB0C4DE' } },
+        left: { style: 'thin', color: { argb: 'FFB0C4DE' } },
+        bottom: { style: 'medium', color: { argb: 'FF548235' } },
+        right: { style: 'thin', color: { argb: 'FFB0C4DE' } },
+      };
+    });
+
+    // Configure number formats for price columns (columns 8 and 9)
+    sheetExample.getColumn(8).numFmt = '#,##0';
+    sheetExample.getColumn(9).numFmt = '#,##0';
+
+    const sampleCatId = categoryId || '01912f20-0000-7000-8000-000000000001';
+
+    const sampleRow1: Record<string, any> = {
+      product_ref_id: 'AO-THUN-NAM-01',
+      title: 'Áo Thun Nam Cổ Tròn Cotton 100% Co Giãn Thoáng Mát',
+      category_id: sampleCatId,
+      description:
+        'Chất liệu 100% cotton cao cấp, thấm hút mồ hôi tối đa, thoáng khí, giữ form chuẩn sau nhiều lần giặt.',
+      brand: 'Taca Fashion',
+      image_urls:
+        'https://images.unsplash.com/photo-1521572267360-ee0c2909d518?w=800,https://images.unsplash.com/photo-1503342217505-b0a15ec3261c?w=800',
+      seller_sku: 'AT-NAM-DEN-M',
+      price: 150000,
+      original_price: 220000,
+      barcode: '8938500101011',
+    };
+
+    const sampleRow2: Record<string, any> = {
+      product_ref_id: 'AO-THUN-NAM-01',
+      title: '', // để trống: hệ thống tự động kế thừa từ dòng đầu tiên của AO-THUN-NAM-01
+      category_id: '',
+      description: '',
+      brand: '',
+      image_urls: '',
+      seller_sku: 'AT-NAM-DEN-L',
+      price: 150000,
+      original_price: 220000,
+      barcode: '8938500101012',
+    };
+
+    const sampleRow3: Record<string, any> = {
+      product_ref_id: 'AO-THUN-NAM-01',
+      title: '',
+      category_id: '',
+      description: '',
+      brand: '',
+      image_urls: 'https://images.unsplash.com/photo-1583743814966-8936f5b7be1a?w=800',
+      seller_sku: 'AT-NAM-TRANG-XL',
+      price: 165000,
+      original_price: 240000,
+      barcode: '8938500101013',
+    };
+
+    const sampleRow4: Record<string, any> = {
+      product_ref_id: 'BALO-LAPTOP-02',
+      title: 'Balo Laptop Chống Nước 15.6 inch Đa Năng Có Cổng Sạc USB',
+      category_id: sampleCatId,
+      description:
+        'Vải Oxford chống thấm nước chuyên dụng, ngăn chống sốc laptop 15.6 inch, thiết kế công sở hiện đại.',
+      brand: 'Taca Urban',
+      image_urls: 'https://images.unsplash.com/photo-1553062407-98eeb64c6a62?w=800',
+      seller_sku: 'BALO-LAPTOP-DEN',
+      price: 350000,
+      original_price: 490000,
+      barcode: '8938500202022',
+    };
+
+    if (attributeDefinitions.length > 0) {
+      attributeDefinitions.forEach((def) => {
+        const val1 = def.allowed_values?.[0] || 'Mẫu 1';
+        const val2 = def.allowed_values?.[1] || def.allowed_values?.[0] || 'Mẫu 2';
+        const val3 = def.allowed_values?.[2] || def.allowed_values?.[0] || 'Mẫu 3';
+        sampleRow1[`attr_${def.key}`] = val1;
+        sampleRow2[`attr_${def.key}`] = val2;
+        sampleRow3[`attr_${def.key}`] = val3;
+        sampleRow4[`attr_${def.key}`] = val1;
+      });
+    }
+
+    [sampleRow1, sampleRow2, sampleRow3, sampleRow4].forEach((rowObj) => {
+      const addedRow = sheetExample.addRow(rowObj);
+      addedRow.height = 22;
+      addedRow.eachCell((cell) => {
+        cell.font = { name: 'Calibri', size: 10 };
+        cell.alignment = { vertical: 'middle' };
+        cell.border = {
+          top: { style: 'thin', color: { argb: 'FFE0E0E0' } },
+          left: { style: 'thin', color: { argb: 'FFE0E0E0' } },
+          bottom: { style: 'thin', color: { argb: 'FFE0E0E0' } },
+          right: { style: 'thin', color: { argb: 'FFE0E0E0' } },
+        };
+      });
+    });
+
+    // -------------------------------------------------------------
+    // SHEET 3: "Hướng dẫn & Danh mục"
     // -------------------------------------------------------------
     const sheet2 = workbook.addWorksheet('Hướng dẫn & Danh mục', {
       views: [{ state: 'frozen', ySplit: 1 }],
@@ -205,7 +330,7 @@ export class ExcelTemplateService {
       { header: 'Ví dụ minh họa / Ghi chú', key: 'example', width: 45 },
     ];
 
-    // Header style for Sheet 2
+    // Header style for Sheet 3
     const sheet2Header = sheet2.getRow(1);
     sheet2Header.height = 30;
     sheet2Header.eachCell((cell) => {
@@ -226,6 +351,11 @@ export class ExcelTemplateService {
 
     // Instructions Content
     const instructions = [
+      {
+        section: '★ Mẫu ví dụ minh họa',
+        rule: 'Vui lòng xem tab sheet "Ví dụ điền mẫu" kế bên để xem trực quan cách điền dữ liệu thực tế cho sản phẩm có biến thể và sản phẩm đơn.',
+        example: 'Xem tab "Ví dụ điền mẫu"',
+      },
       {
         section: '1. Quy tắc gom nhóm SPU - SKU',
         rule: 'Sử dụng "Mã tham chiếu sản phẩm (*)" (product_ref_id) để nhóm các dòng SKU vào cùng 1 sản phẩm cha (SPU).',

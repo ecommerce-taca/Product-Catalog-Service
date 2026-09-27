@@ -240,7 +240,7 @@ export class ImportWorkerService {
       return;
     }
 
-    const worksheet = workbook.getWorksheet(1);
+    const worksheet = workbook.getWorksheet('Sản phẩm & Biến thể') || workbook.getWorksheet(1);
     if (!worksheet) {
       job.status = ImportJobStatus.FAILED;
       job.completed_at = new Date();
