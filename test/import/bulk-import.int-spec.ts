@@ -105,10 +105,13 @@ class InMemoryImportJobRepo {
   }
 
   async findActiveJobByShop(shopId: string): Promise<ImportJobDocument | null> {
+    const now = new Date();
     for (const job of this.jobs.values()) {
       if (
         job.shop_id === shopId &&
-        (job.status === ImportJobStatus.PENDING || job.status === ImportJobStatus.PROCESSING)
+        (job.status === ImportJobStatus.PENDING ||
+          (job.status === ImportJobStatus.PROCESSING &&
+            (!job.locked_until || new Date(job.locked_until).getTime() > now.getTime())))
       ) {
         return job as ImportJobDocument;
       }
@@ -165,6 +168,15 @@ class InMemoryImportJobRepo {
       ) {
         job.status = ImportJobStatus.FAILED;
         job.locked_until = null;
+        if (!job.error_summary) {
+          job.error_summary = [];
+        }
+        job.error_summary.push({
+          row_index: 0,
+          product_ref_id: 'SYSTEM',
+          error_code: 'JOB_LEASE_EXPIRED',
+          error_message: 'Job processing exceeded lease duration and was reclaimed.',
+        });
         count++;
       }
     }
@@ -1009,6 +1021,49 @@ describe('Bulk Product Import Integration Spec [PCAT-IMP-05]', () => {
       expect(res.status).toBe(409);
       expect(res.body.error.code).toBe('PRODUCT_IMPORT_JOB_RUNNING');
     });
+
+    it('[AC-IM-07-SF2] Zombie Job hết hạn lease 2 phút được tự phục hồi bởi reclaimStaleJobs() khi upload -> không bị kẹt 409, trả về 202 ACCEPTED', async () => {
+      const zombieJobId = '01912f70-7a1b-7c12-9c55-8b1c34a6d902';
+      // Seed a stale PROCESSING job whose lease expired 5 minutes ago
+      inMemoryImportJobRepo.set({
+        _id: zombieJobId,
+        shop_id: shopA,
+        actor_user_id: userSellerA,
+        status: ImportJobStatus.PROCESSING,
+        file_url: 'imports/shop-01/zombie.xlsx',
+        total_rows: 50,
+        processed_rows: 10,
+        success_count: 5,
+        error_count: 0,
+        error_summary: [],
+        locked_until: new Date(Date.now() - 300_000), // Expired 5 mins ago
+      });
+
+      const validBuffer = await createImportExcelBuffer([
+        {
+          refId: 'REF-RECLAIM-01',
+          title: 'Áo thun phục hồi sau khi zombie job hết hạn',
+          catId: catFashion,
+          sku: 'SKU-RECLAIM-01',
+          price: 150000,
+        },
+      ]);
+
+      const res = await request(app.getHttpServer())
+        .post('/seller/products/import')
+        .set(sellerAHeaders)
+        .attach('file', validBuffer, 'reclaim_products.xlsx');
+
+      expect(res.status).toBe(202);
+      expect(res.body.data.status).toBe(ImportJobStatus.PENDING);
+      expect(res.body.data.job_id).toBeDefined();
+
+      // Verify previous zombie job transitioned to FAILED and released lock
+      const zombieJob = await inMemoryImportJobRepo.findById(zombieJobId);
+      expect(zombieJob?.status).toBe(ImportJobStatus.FAILED);
+      expect(zombieJob?.locked_until).toBeNull();
+      expect(zombieJob?.error_summary?.[0]?.error_code).toBe('JOB_LEASE_EXPIRED');
+    });
   });
 
   // ==========================================================================
@@ -1369,6 +1424,78 @@ describe('Bulk Product Import Integration Spec [PCAT-IMP-05]', () => {
         expect.anything(),
       );
     });
+
+    it('[AC-IM-13-SF1] Phòng chống SSRF qua HTTP 302 redirect (redirect: manual) -> từ chối tải ảnh chuyển hướng, SPU bảo tồn DRAFT', async () => {
+      const redirectUrl = 'https://external-image-host.com/photo-redirect.jpg';
+
+      fetchMockHandler = async (url: string, init?: any) => {
+        if (url === redirectUrl) {
+          expect(init?.redirect).toBe('manual');
+          return {
+            ok: false,
+            status: 302,
+            statusText: 'Found',
+            type: 'basic',
+            headers: new Headers({
+              location: 'http://169.254.169.254/latest/meta-data/',
+            }),
+            arrayBuffer: async () => Buffer.from(''),
+          };
+        }
+        return { ok: false, status: 404, statusText: 'Not Found' };
+      };
+
+      const buffer = await createImportExcelBuffer([
+        {
+          refId: 'REF-IMG-REDIRECT',
+          title: 'Áo thun có URL ảnh bị 302 redirect nguy hiểm',
+          catId: catFashion,
+          sku: 'SKU-IMG-REDIRECT',
+          price: 220000,
+          urls: redirectUrl,
+        },
+      ]);
+
+      const jobId = uuidv7();
+      const s3Key = `imports/shop-${shopA}/${jobId}.xlsx`;
+      s3StorageMap.set(s3Key, buffer);
+
+      await inMemoryImportJobRepo.create({
+        _id: jobId,
+        shop_id: shopA,
+        actor_user_id: userSellerA,
+        status: ImportJobStatus.PENDING,
+        file_url: s3Key,
+        total_rows: 1,
+        processed_rows: 0,
+        success_count: 0,
+        error_count: 0,
+        error_summary: [],
+      });
+
+      await workerService.processJob(jobId);
+
+      const job = await inMemoryImportJobRepo.findById(jobId);
+      expect(job?.status).toBe(ImportJobStatus.COMPLETED);
+      expect(job?.success_count).toBe(1); // SPU created successfully in DRAFT (fault-tolerant)
+      expect(job?.error_count).toBe(0);
+
+      // Warning recorded in error_summary for redirect failure
+      const redirectWarning = job?.error_summary?.find((e) =>
+        e.error_message?.includes('URL chuyển hướng (Redirect) không được hỗ trợ'),
+      );
+      expect(redirectWarning).toBeDefined();
+      expect(redirectWarning?.error_code).toContain('MEDIA_DOWNLOAD_FAILED');
+
+      // Product created in DRAFT with 0 media
+      const products = await inMemoryProductRepo.find({ shop_id: shopA });
+      const spuRedirect = products.find((p) => p.title.includes('302 redirect'));
+      expect(spuRedirect).toBeDefined();
+      expect(spuRedirect?.status).toBe(ProductStatus.DRAFT);
+
+      const mediaList = await inMemoryProductMediaRepo.findByProductId(String(spuRedirect!._id));
+      expect(mediaList.length).toBe(0);
+    });
   });
 
   // ==========================================================================
@@ -1503,6 +1630,58 @@ describe('Bulk Product Import Integration Spec [PCAT-IMP-05]', () => {
 
       expect(publicRes.status).toBe(404);
       expect(publicRes.body.error.code).toBe('PRODUCT_NOT_FOUND');
+    });
+
+    it('[AC-IM-14-SF3] Stage 3 database transaction failure được bắt an toàn -> job chuyển sang FAILED, locked_until giải phóng', async () => {
+      // Configure mockTransactionRunner to simulate write conflict / DB transaction failure once
+      mockTransactionRunner.execute.mockRejectedValueOnce(
+        new Error('Transaction aborted due to write conflict on products collection'),
+      );
+
+      const buffer = await createImportExcelBuffer([
+        {
+          refId: 'REF-TX-FAIL-01',
+          title: 'Sản phẩm thử nghiệm lỗi transaction Stage 3',
+          catId: catFashion,
+          sku: 'SKU-TX-FAIL-01',
+          price: 180000,
+        },
+      ]);
+
+      const jobId = uuidv7();
+      const s3Key = `imports/shop-${shopA}/${jobId}.xlsx`;
+      s3StorageMap.set(s3Key, buffer);
+
+      await inMemoryImportJobRepo.create({
+        _id: jobId,
+        shop_id: shopA,
+        actor_user_id: userSellerA,
+        status: ImportJobStatus.PENDING,
+        file_url: s3Key,
+        total_rows: 1,
+        processed_rows: 0,
+        success_count: 0,
+        error_count: 0,
+        error_summary: [],
+      });
+
+      // Should not throw unhandled exception
+      await expect(workerService.processJob(jobId)).resolves.not.toThrow();
+
+      const job = await inMemoryImportJobRepo.findById(jobId);
+      expect(job?.status).toBe(ImportJobStatus.FAILED);
+      expect(job?.locked_until).toBeNull();
+      expect(job?.completed_at).toBeDefined();
+
+      const txError = job?.error_summary?.find(
+        (e) => e.error_code === 'DATABASE_TRANSACTION_FAILED' && e.product_ref_id === 'SYSTEM',
+      );
+      expect(txError).toBeDefined();
+      expect(txError?.error_message).toContain('write conflict');
+
+      // 0 products created
+      const products = await inMemoryProductRepo.find({ shop_id: shopA });
+      expect(products.filter((p) => p.title.includes('lỗi transaction')).length).toBe(0);
     });
   });
 
