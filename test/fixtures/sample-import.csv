@@ -1,2 +1,2 @@
-product_ref_id,title,category_id,seller_sku,price
-REF-1,Title,CAT-1,SKU-1,100000
+product_ref_id,title,category_id,description,brand,image_urls,seller_sku,price,original_price,barcode,attr_color,attr_size
+REF-CSV-01,Áo Polo Nam Classic,0191ec4d-91b7-7e6d-9d41-000000000100,Áo polo chất cá sấu thoáng mát,TacaPolo,https://images.unsplash.com/photo-1521572267360-ee0c2909d518,POLO-01-DEN-M,220000,290000,8931234567890,Đen,M

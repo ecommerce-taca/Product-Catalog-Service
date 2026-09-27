@@ -1063,6 +1063,9 @@ describe('Bulk Product Import Integration Spec [PCAT-IMP-05]', () => {
       expect(zombieJob?.status).toBe(ImportJobStatus.FAILED);
       expect(zombieJob?.locked_until).toBeNull();
       expect(zombieJob?.error_summary?.[0]?.error_code).toBe('JOB_LEASE_EXPIRED');
+
+      // Drain background worker to prevent bleeding into later tests
+      await new Promise((r) => setTimeout(r, 100));
     });
   });
 
@@ -1070,6 +1073,15 @@ describe('Bulk Product Import Integration Spec [PCAT-IMP-05]', () => {
   // NHÓM 3: Worker SPU-SKU Parsing & Validation (FR-IM-03)
   // ==========================================================================
   describe('Nhóm 3: Worker SPU-SKU Parsing & Validation (FR-IM-03)', () => {
+    beforeEach(() => {
+      inMemoryProductRepo.clear();
+      inMemorySkuRepo.clear();
+      inMemoryProductCategoryRepo.clear();
+      inMemoryProductMediaRepo.clear();
+      inMemoryOutboxRepo.clear();
+      s3StorageMap.clear();
+    });
+
     it('[AC-IM-08] Gom nhóm đa biến thể: các dòng có cùng product_ref_id gom vào 1 SPU với nhiều SKUs', async () => {
       const buffer = await createImportExcelBuffer([
         {

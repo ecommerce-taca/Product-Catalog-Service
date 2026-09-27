@@ -551,19 +551,20 @@ async function run() {
   const fs = require('fs');
   const path = require('path');
   const fixturesDir = path.join(__dirname, 'fixtures');
-  const sampleXlsx = fs.readFileSync(path.join(fixturesDir, 'sample-import.xlsx'));
+  const sampleXlsx = fs.readFileSync(path.join(fixturesDir, 'sample-import-valid.xlsx'));
+  const partialErrorsXlsx = fs.readFileSync(path.join(fixturesDir, 'sample-import-partial-errors.xlsx'));
   const oversizeXlsx = fs.readFileSync(path.join(fixturesDir, 'oversize-import.xlsx'));
   const sampleCsv = fs.readFileSync(path.join(fixturesDir, 'sample-import.csv'));
 
-  // Test 10.6: Upload Valid Excel File -> 202 Accepted
+  // Test 10.6a: Upload 100% Valid Excel File (sample-import-valid.xlsx) -> 202 Accepted
   res = await uploadMultipart(
     `${BASE_PATH}/seller/products/import`,
     sellerHeaders,
     sampleXlsx,
-    'sample-import.xlsx',
+    'sample-import-valid.xlsx',
   );
   console.log(
-    `[10.6] POST /seller/products/import (valid file) => ${res.status}`,
+    `[10.6a] POST /seller/products/import (valid file) => ${res.status}`,
     `JobId: ${res.data?.data?.job_id || res.data?.data?.jobId}, Status: ${res.data?.data?.status}`,
   );
   const importJobId = res.data?.data?.job_id || res.data?.data?.jobId;
@@ -595,16 +596,16 @@ async function run() {
   );
 
   // Test 10.9: Upload when active job running -> 409 Conflict (PRODUCT_IMPORT_JOB_RUNNING)
-  // If the job from 10.6 is still processing/pending or simulated:
+  // If the job from 10.6a is still processing/pending:
   res = await uploadMultipart(
     `${BASE_PATH}/seller/products/import`,
     sellerHeaders,
     sampleXlsx,
-    'sample-import.xlsx',
+    'sample-import-valid.xlsx',
   );
   console.log(
     `[10.9] POST /seller/products/import (concurrent job attempt) => ${res.status}`,
-    res.data?.error?.code || `Accepted (job 10.6 completed already: ${res.data?.data?.status})`,
+    res.data?.error?.code || `Accepted (job 10.6a completed already: ${res.data?.data?.status})`,
   );
 
   // Test 10.10: Suspended Shop Upload Attempt -> 403 Forbidden (PRODUCT_SHOP_SUSPENDED)
@@ -615,7 +616,7 @@ async function run() {
       'x-user-shop-scope': '01912f20-8888-7000-8000-000000008888',
     },
     sampleXlsx,
-    'sample-import.xlsx',
+    'sample-import-valid.xlsx',
   );
   console.log(
     `[10.10] POST /seller/products/import (suspended shop) => ${res.status}`,
@@ -675,6 +676,37 @@ async function run() {
     `[10.15] Edge Case: Non-existent job result query => ${res.status}`,
     res.data?.error?.code,
   );
+
+  // Test 10.6b: Upload Excel with Partial Errors & Security Test Cases (sample-import-partial-errors.xlsx)
+  // Wait 1.5s for previous job to finish
+  await new Promise((r) => setTimeout(r, 1500));
+  res = await uploadMultipart(
+    `${BASE_PATH}/seller/products/import`,
+    sellerHeaders,
+    partialErrorsXlsx,
+    'sample-import-partial-errors.xlsx',
+  );
+  console.log(
+    `[10.6b] POST /seller/products/import (partial errors file) => ${res.status}`,
+    `JobId: ${res.data?.data?.job_id || res.data?.data?.jobId}, Status: ${res.data?.data?.status}`,
+  );
+  const errorJobId = res.data?.data?.job_id || res.data?.data?.jobId;
+  if (errorJobId) {
+    // Wait for worker to finish processing
+    await new Promise((r) => setTimeout(r, 1500));
+    res = await request('GET', `${BASE_PATH}/seller/products/import/jobs/${errorJobId}`, sellerHeaders);
+    console.log(
+      `[10.11b] GET /seller/products/import/jobs/${errorJobId} => ${res.status}`,
+      `Status: ${res.data?.data?.status}, Success: ${res.data?.data?.success_count}, Errors: ${res.data?.data?.error_count}`,
+    );
+    if (res.data?.data?.error_count > 0) {
+      res = await request('GET', `${BASE_PATH}/seller/products/import/jobs/${errorJobId}/result`, sellerHeaders);
+      console.log(
+        `[10.12b] GET /seller/products/import/jobs/${errorJobId}/result (JSON presigned URL) => ${res.status}`,
+        res.status === 200 ? `Result S3 Key: ${res.data?.data?.result_file_url?.substring(0, 60)}...` : res.data?.error?.code,
+      );
+    }
+  }
 
   console.log('\n=== ALL HTTP RUNNER TESTS EXECUTED SUCCESSFULLY ===');
 }

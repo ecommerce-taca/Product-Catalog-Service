@@ -677,8 +677,49 @@ x-user-shop-scope: {{suspendedShopScope}}
 GET {{baseUrl}}/seller/products/import/template
 Accept: application/json
 
-### [10.6] Upload file Excel hợp lệ -> 202 Accepted
-# Tiếp nhận tệp và khởi tạo tác vụ import ngầm (< 500ms)
+### [10.6a] Upload file Excel 100% hợp lệ (Valid Multi-variant, Single-variant & No-image SPUs) -> 202 Accepted
+# Mô tả: File 'sample-import-valid.xlsx' bao gồm 3 SPU (6 dòng SKU):
+# - SPU 1 (REF-AO-NAM-01): Đa biến thể (4 SKUs kết hợp Màu sắc & Kích cỡ), đầy đủ ảnh, giá, barcode
+# - SPU 2 (REF-BALO-01): Đơn biến thể (1 SKU Tiêu chuẩn)
+# - SPU 3 (REF-NON-01): Đơn biến thể không có ảnh (kiểm thử tạo DRAFT không ảnh bìa - AC-IM-12)
+# Mong đợi: 202 Accepted (< 500ms), trả về job_id, status PENDING
+# @name uploadValidExcel
+POST {{baseUrl}}/seller/products/import
+Content-Type: multipart/form-data; boundary=WebAppBoundary
+x-user-id: {{sellerId}}
+x-user-roles: {{sellerRoles}}
+x-user-shop-scope: {{sellerShopScope}}
+
+--WebAppBoundary
+Content-Disposition: form-data; name="file"; filename="sample-import-valid.xlsx"
+Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+
+< ./test/fixtures/sample-import-valid.xlsx
+--WebAppBoundary--
+
+### [10.6b] Upload file Excel chứa lỗi nghiệp vụ & kiểm thử bảo mật (Partial Success & Error Cases) -> 202 Accepted
+# Mô tả: File 'sample-import-partial-errors.xlsx' bao gồm 5 trường hợp:
+# - SPU 1 (REF-HOP-LE-01): SPU hợp lệ (1 SKU) -> Tạo DRAFT thành công (Partial Success)
+# - SPU 2 (REF-LOI-CAT-01): Mã danh mục không tồn tại -> Lỗi PRODUCT_CATEGORY_INVALID
+# - SPU 3 (REF-LOI-VAR-01): Trùng lặp tổ hợp biến thể trong cùng SPU (Trắng, 40) -> Lỗi PRODUCT_SKU_DUPLICATE_VARIANT
+# - SPU 4 (REF-LOI-GIA-01): Giá bán < 1.000 VND -> Lỗi PRODUCT_PRICE_INVALID
+# - SPU 5 (REF-TEST-FORMULA-01): Kiểm thử Formula Injection (CWE-1236) với tiêu đề/thuộc tính bắt đầu bằng =, +, -, @
+# Mong đợi: 202 Accepted, worker xử lý và tổng hợp các dòng lỗi vào kết quả để tải về tại [10.12]
+# @name uploadPartialErrorsExcel
+POST {{baseUrl}}/seller/products/import
+Content-Type: multipart/form-data; boundary=WebAppBoundary
+x-user-id: {{sellerId}}
+x-user-roles: {{sellerRoles}}
+x-user-shop-scope: {{sellerShopScope}}
+
+--WebAppBoundary
+Content-Disposition: form-data; name="file"; filename="sample-import-partial-errors.xlsx"
+Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
+
+< ./test/fixtures/sample-import-partial-errors.xlsx
+--WebAppBoundary--
+
+### [10.6c] Upload file Excel mẫu mặc định (sample-import.xlsx) -> 202 Accepted
 POST {{baseUrl}}/seller/products/import
 Content-Type: multipart/form-data; boundary=WebAppBoundary
 x-user-id: {{sellerId}}
@@ -693,6 +734,7 @@ Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
 --WebAppBoundary--
 
 ### [10.7] Upload file vượt quá 2MB -> 400 Bad Request (PRODUCT_IMPORT_FILE_TOO_LARGE)
+# File 'oversize-import.xlsx' có kích thước 2.1MB (> 2MB)
 POST {{baseUrl}}/seller/products/import
 Content-Type: multipart/form-data; boundary=WebAppBoundary
 x-user-id: {{sellerId}}
@@ -706,7 +748,8 @@ Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet
 < ./test/fixtures/oversize-import.xlsx
 --WebAppBoundary--
 
-### [10.8] Upload file sai định dạng -> 400 Bad Request (PRODUCT_IMPORT_FILE_TYPE_INVALID)
+### [10.8] Upload file sai định dạng (File CSV: sample-import.csv) -> 400 Bad Request (PRODUCT_IMPORT_FILE_TYPE_INVALID)
+# Hệ thống chỉ chấp nhận tệp Excel (.xlsx). File CSV sẽ bị từ chối ngay lập tức.
 POST {{baseUrl}}/seller/products/import
 Content-Type: multipart/form-data; boundary=WebAppBoundary
 x-user-id: {{sellerId}}
@@ -721,6 +764,7 @@ Content-Type: text/csv
 --WebAppBoundary--
 
 ### [10.9] Upload khi đang có job PROCESSING/PENDING -> 409 Conflict (PRODUCT_IMPORT_JOB_RUNNING)
+# Mỗi shop chỉ được phép có tối đa 1 tác vụ import chạy tại một thời điểm
 POST {{baseUrl}}/seller/products/import
 Content-Type: multipart/form-data; boundary=WebAppBoundary
 x-user-id: {{sellerId}}
