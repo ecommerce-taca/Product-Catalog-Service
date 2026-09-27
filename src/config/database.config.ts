@@ -29,7 +29,9 @@ export const mongooseConnectionOptions: ConnectOptions = {
 };
 
 export default registerAs('database', (): DatabaseConfig => ({
-  uri: process.env.MONGODB_URI || 'mongodb://localhost:27017/product_catalog?replicaSet=rs0',
+  uri:
+    process.env.MONGODB_URI ||
+    'mongodb://localhost:27017/product_catalog?replicaSet=rs0&directConnection=true',
   options: {
     ...mongooseConnectionOptions,
     minPoolSize: process.env.MONGODB_MIN_POOL_SIZE

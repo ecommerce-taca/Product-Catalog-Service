@@ -1,4 +1,8 @@
 services:
+  # ==============================================================================
+  # 1. DATABASE LAYER: MongoDB 8.0 with Single-Node Replica Set (rs0)
+  # Bắt buộc cho Multi-document Transactions và CDC Oplog Change Streams
+  # ==============================================================================
   mongodb:
     image: mongo:8.0
     container_name: product-catalog-mongodb
@@ -36,6 +40,91 @@ services:
       - MONGODB_PORT=27017
       - REPLICA_SET_NAME=rs0
 
+  # ==============================================================================
+  # 2. OBJECT STORAGE LAYER: MinIO S3 Compatible Storage
+  # Phục vụ tải ảnh/video sản phẩm (Batch 5) và xuất báo cáo CSV (Batch 8)
+  # ==============================================================================
+  minio:
+    image: coollabsio/minio:latest
+    container_name: product-catalog-minio
+    entrypoint:
+      - /bin/sh
+      - -c
+      - "mkdir -p /data/taca-product-media-prod && minio server /data --console-address ':9001'"
+    ports:
+      - '9000:9000' # S3 API endpoint
+      - '9001:9001' # Web Console UI
+    environment:
+      - MINIO_ROOT_USER=minioadmin
+      - MINIO_ROOT_PASSWORD=minioadmin
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ['CMD-SHELL', 'wget -q --spider http://localhost:9000/minio/health/live || exit 1']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+    restart: unless-stopped
+
+  # ==============================================================================
+  # 3. EVENT BROKER LAYER: Apache Kafka (KRaft Mode - Single Node, No Zookeeper)
+  # Phục vụ Ingestion Projections và CDC Outbox Event Bus
+  # ==============================================================================
+  kafka:
+    image: apache/kafka:3.9.0
+    container_name: product-catalog-kafka
+    ports:
+      - '9092:9092' # Host external port (truy cập từ máy local)
+    environment:
+      - KAFKA_NODE_ID=1
+      - KAFKA_PROCESS_ROLES=broker,controller
+      - KAFKA_LISTENERS=PLAINTEXT://:29092,PLAINTEXT_HOST://:9092,CONTROLLER://:9093
+      - KAFKA_ADVERTISED_LISTENERS=PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      - KAFKA_LISTENER_SECURITY_PROTOCOL_MAP=PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT,CONTROLLER:PLAINTEXT
+      - KAFKA_CONTROLLER_LISTENER_NAMES=CONTROLLER
+      - KAFKA_CONTROLLER_QUORUM_VOTERS=1@kafka:9093
+      - KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS=0
+      - KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR=1
+      - KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR=1
+      - KAFKA_TRANSACTION_STATE_LOG_MIN_ISR=1
+      - KAFKA_AUTO_CREATE_TOPICS_ENABLE=true
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    healthcheck:
+      test: ['CMD-SHELL', '/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 || exit 1']
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 10s
+    restart: unless-stopped
+
+  kafka-init:
+    image: apache/kafka:3.9.0
+    container_name: product-catalog-kafka-init
+    restart: 'no'
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      echo 'Creating predefined Kafka topics for Product Catalog Service...';
+      /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 --create --if-not-exists --topic catalog.events.v1 --partitions 3 --replication-factor 1;
+      /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 --create --if-not-exists --topic inventory.events.v1 --partitions 3 --replication-factor 1;
+      /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 --create --if-not-exists --topic auth.events.v1 --partitions 3 --replication-factor 1;
+      /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 --create --if-not-exists --topic rating.events.v1 --partitions 3 --replication-factor 1;
+      /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 --create --if-not-exists --topic product-catalog.events.dlq.v1 --partitions 3 --replication-factor 1;
+      /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 --create --if-not-exists --topic product.events.v1 --partitions 3 --replication-factor 1;
+      /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 --create --if-not-exists --topic sku.events.v1 --partitions 3 --replication-factor 1;
+      /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 --create --if-not-exists --topic category.events.v1 --partitions 3 --replication-factor 1;
+      echo 'All Kafka topics initialized successfully:';
+      /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:29092 --list;
+      exit 0;
+      "
+
+  # ==============================================================================
+  # 4. APPLICATION LAYER: Product Catalog Service (NestJS)
+  # ==============================================================================
   app:
     build:
       context: .
@@ -48,20 +137,43 @@ services:
       - NODE_ENV=development
       - PORT=3000
       - GLOBAL_PREFIX=api/v1
+      # Database Configuration
       - MONGODB_URI=mongodb://mongodb:27017/product_catalog?replicaSet=rs0
       - MONGODB_MIN_POOL_SIZE=5
       - MONGODB_MAX_POOL_SIZE=20
       - MONGODB_SOCKET_TIMEOUT_MS=30000
       - MONGODB_SERVER_SELECTION_TIMEOUT_MS=5000
       - MONGODB_READ_PREFERENCE=primaryPreferred
+      # Object Storage Configuration (MinIO inside Docker network)
+      - AWS_REGION=ap-southeast-1
+      - AWS_ACCESS_KEY_ID=minioadmin
+      - AWS_SECRET_ACCESS_KEY=minioadmin
+      - AWS_S3_BUCKET=taca-product-media-prod
+      - AWS_S3_ENDPOINT=http://minio:9000
+      - AWS_S3_PUBLIC_URL=http://localhost:9000
+      - AWS_S3_FORCE_PATH_STYLE=true
+      - MEDIA_SIGNED_URL_TTL=600
+      # Event Broker Configuration
+      - KAFKA_BROKERS=kafka:29092
     depends_on:
       mongodb:
         condition: service_healthy
       mongo-init:
         condition: service_completed_successfully
+      minio:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+      kafka-init:
+        condition: service_completed_successfully
     profiles:
       - app
+      - full
 
 volumes:
   mongo_data:
     name: product-catalog-mongo-data
+  minio_data:
+    name: product-catalog-minio-data
+  kafka_data:
+    name: product-catalog-kafka-data

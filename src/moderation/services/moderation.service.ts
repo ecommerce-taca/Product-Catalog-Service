@@ -7,7 +7,7 @@ import {
 } from '@nestjs/common';
 import { FilterQuery } from 'mongoose';
 import { v7 as uuidv7 } from 'uuid';
-import { ProductStatus } from '../../database/schemas/product.schema';
+import { ProductDocument, ProductStatus } from '../../database/schemas/product.schema';
 import {
   AuditAction,
   AuditTargetType,
@@ -25,8 +25,11 @@ import {
 import { BlockProductDto } from '../dto/block-product.dto';
 import { UnblockProductDto } from '../dto/unblock-product.dto';
 import { QueryAuditsDto } from '../dto/query-audits.dto';
+import { QueryAdminProductsDto } from '../dto/query-admin-products.dto';
 import {
+  AdminProductDetailDto,
   BlockProductResponseDto,
+  PaginatedAdminProductsResponseDto,
   PaginatedAuditsResponseDto,
   UnblockProductResponseDto,
 } from '../dto/moderation-response.dto';
@@ -313,6 +316,106 @@ export class ModerationService {
         total,
         total_pages: Math.ceil(total / size) || 1,
       },
+    };
+  }
+
+  /**
+   * Retrieves paginated products for admin moderation across all statuses.
+   */
+  async getAdminProducts(query: QueryAdminProductsDto): Promise<PaginatedAdminProductsResponseDto> {
+    const filter: FilterQuery<ProductDocument> = {};
+
+    if (query.status) {
+      filter.status = query.status;
+    }
+    if (query.shop_id) {
+      filter.shop_id = query.shop_id;
+    }
+    if (query.category_id) {
+      filter.primary_category_id = query.category_id;
+    }
+    if (query.q && query.q.trim()) {
+      const escaped = query.q.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      filter.$or = [{ title: new RegExp(escaped, 'i') }, { slug: new RegExp(escaped, 'i') }];
+    }
+    if (query.updated_from || query.updated_to) {
+      filter.updated_at = {};
+      if (query.updated_from) {
+        filter.updated_at.$gte = new Date(query.updated_from);
+      }
+      if (query.updated_to) {
+        filter.updated_at.$lte = new Date(query.updated_to);
+      }
+    }
+
+    const page = query.page && query.page > 0 ? Number(query.page) : 1;
+    const size = query.size && query.size > 0 ? Math.min(Number(query.size), 100) : 20;
+    const skip = (page - 1) * size;
+
+    const [items, total] = await Promise.all([
+      this.productRepository.find(filter, { skip, limit: size, sort: { updated_at: -1 } }),
+      this.productRepository.count(filter),
+    ]);
+
+    return {
+      data: items.map((p) => ({
+        product_id: p._id,
+        title: p.title,
+        shop_id: p.shop_id,
+        status: p.status,
+        category_id: p.primary_category_id || null,
+        updated_at: p.updated_at,
+      })),
+      meta: {
+        page,
+        size,
+        total,
+        total_pages: Math.ceil(total / size) || 1,
+      },
+    };
+  }
+
+  /**
+   * Retrieves full product detail for admin inspection regardless of public visibility.
+   */
+  async getAdminProductDetail(productId: string): Promise<AdminProductDetailDto> {
+    const product = await this.productRepository.findById(productId);
+    if (!product) {
+      throw new NotFoundException({
+        code: 'PRODUCT_NOT_FOUND',
+        message: 'Không tìm thấy sản phẩm.',
+      });
+    }
+
+    const audits = await this.catalogAuditRepository.findAudits(
+      { target_id: productId, target_type: AuditTargetType.PRODUCT },
+      1,
+      10,
+    );
+
+    const auditSummary = audits.items.map((a: any) => ({
+      action: a.action,
+      actor: a.actor_user_id,
+      occurred_at: a.occurred_at,
+    }));
+
+    return {
+      product_id: product._id,
+      title: product.title,
+      status: product.status,
+      shop_id: product.shop_id,
+      shop_projection: {
+        shop_id: product.shop_id,
+        status: 'ACTIVE',
+        kyc_status: 'APPROVED',
+      },
+      audit_summary: auditSummary,
+      stock_display: {
+        status: 'IN_STOCK',
+        as_of: new Date(),
+      },
+      block_reason: product.status === ProductStatus.BLOCKED ? 'Vi phạm chính sách' : null,
+      version: Number(product.version),
     };
   }
 }

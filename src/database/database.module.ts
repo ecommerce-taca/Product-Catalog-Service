@@ -14,6 +14,7 @@ import { ProductCategory, ProductCategorySchema } from './schemas/product-catego
 import { Sku, SkuSchema } from './schemas/sku.schema';
 import { Product, ProductSchema } from './schemas/product.schema';
 import { ProductMedia, ProductMediaSchema } from './schemas/product-media.schema';
+import { ImportJob, ImportJobSchema } from './schemas/import-job.schema';
 
 @Global()
 @Module({
@@ -41,6 +42,7 @@ import { ProductMedia, ProductMediaSchema } from './schemas/product-media.schema
       { name: Sku.name, schema: SkuSchema },
       { name: Product.name, schema: ProductSchema },
       { name: ProductMedia.name, schema: ProductMediaSchema },
+      { name: ImportJob.name, schema: ImportJobSchema },
     ]),
   ],
   providers: [TransactionRunner],

@@ -17,7 +17,7 @@ export default registerAs('storage', (): StorageConfig => ({
   secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY || 'minioadmin',
   bucket: process.env.AWS_S3_BUCKET || 'taca-product-media-prod',
   endpoint: process.env.AWS_S3_ENDPOINT || 'http://localhost:9000',
-  forcePathStyle: process.env.AWS_S3_FORCE_PATH_STYLE === 'true',
+  forcePathStyle: process.env.AWS_S3_FORCE_PATH_STYLE !== 'false',
   signedUrlTtl: parseInt(process.env.MEDIA_SIGNED_URL_TTL || '600', 10),
   publicBaseUrl: process.env.CDN_BASE_URL || process.env.AWS_S3_PUBLIC_URL,
 }));
