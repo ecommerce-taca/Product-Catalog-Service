@@ -618,6 +618,51 @@ describe('ImportWorkerService', () => {
       ).toBe(true);
       expect(mockJobDoc.success_count).toBe(1);
     });
+
+    it('should catch Stage 3 transaction failure, mark job FAILED, record error, and release semaphore (SF-3)', async () => {
+      const buffer = await createWorkbookBuffer([
+        {
+          refId: 'REF-TX-FAIL',
+          title: 'Sản phẩm lỗi transaction',
+          catId: testCategoryId,
+          sku: 'SKU-TX-01',
+          price: 100000,
+        },
+      ]);
+      mockS3Download(buffer);
+
+      const mockJobDoc: any = {
+        _id: testJobId,
+        shop_id: testShopId,
+        status: ImportJobStatus.PENDING,
+        file_url: `imports/shop-${testShopId}/${testJobId}.xlsx`,
+        save: jest.fn().mockResolvedValue(true),
+        error_summary: [],
+      };
+      mockImportJobRepository.findById.mockResolvedValue(mockJobDoc);
+      mockCategoryRepository.findById.mockResolvedValue({
+        _id: testCategoryId,
+        status: CategoryStatus.ACTIVE,
+      });
+      mockSkuRepository.findBySellerSkus.mockResolvedValue([]);
+
+      mockTransactionRunner.execute.mockRejectedValueOnce(
+        new Error('Transaction aborted due to write conflict'),
+      );
+
+      await service.processJob(testJobId);
+
+      expect(mockJobDoc.status).toBe(ImportJobStatus.FAILED);
+      expect(mockJobDoc.locked_until).toBeNull();
+      expect(mockJobDoc.completed_at).toBeDefined();
+      expect(
+        mockJobDoc.error_summary.some(
+          (e: any) =>
+            e.error_code === 'DATABASE_TRANSACTION_FAILED' && e.product_ref_id === 'SYSTEM',
+        ),
+      ).toBe(true);
+      expect(service.getActiveWorkersCount()).toBe(0);
+    });
   });
 
   describe('Concurrency Semaphore (GLOBAL_MAX_CONCURRENT_WORKERS = 3)', () => {

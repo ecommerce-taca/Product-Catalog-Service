@@ -45,7 +45,7 @@ describe('MongoImportJobRepository', () => {
   });
 
   describe('findActiveJobByShop', () => {
-    it('should query active jobs with status PENDING or PROCESSING and return document', async () => {
+    it('should query active jobs with status PENDING or active PROCESSING lease and return document', async () => {
       const mockJob = {
         _id: mockJobId,
         shop_id: mockShopId,
@@ -53,31 +53,55 @@ describe('MongoImportJobRepository', () => {
       };
       const execMock = jest.fn().mockResolvedValue(mockJob);
       const sessionMock = jest.fn().mockReturnValue({ exec: execMock });
-      (mockModel.findOne as jest.Mock).mockReturnValue({
+      const sortMock = jest.fn().mockReturnValue({
         session: sessionMock,
         exec: execMock,
+      });
+      (mockModel.findOne as jest.Mock).mockReturnValue({
+        sort: sortMock,
       });
 
       const result = await repository.findActiveJobByShop(mockShopId, mockSession);
 
       expect(mockModel.findOne).toHaveBeenCalledWith({
         shop_id: mockShopId,
-        status: { $in: [ImportJobStatus.PENDING, ImportJobStatus.PROCESSING] },
+        $or: [
+          { status: ImportJobStatus.PENDING },
+          {
+            status: ImportJobStatus.PROCESSING,
+            $or: [{ locked_until: null }, { locked_until: { $gt: expect.any(Date) } }],
+          },
+        ],
       });
+      expect(sortMock).toHaveBeenCalledWith({ created_at: -1 });
       expect(sessionMock).toHaveBeenCalledWith(mockSession);
       expect(result).toEqual(mockJob);
     });
 
     it('should return null when no active job exists for shop', async () => {
       const execMock = jest.fn().mockResolvedValue(null);
-      (mockModel.findOne as jest.Mock).mockReturnValue({ exec: execMock });
+      const sessionMock = jest.fn().mockReturnValue({ exec: execMock });
+      const sortMock = jest.fn().mockReturnValue({
+        session: sessionMock,
+        exec: execMock,
+      });
+      (mockModel.findOne as jest.Mock).mockReturnValue({
+        sort: sortMock,
+      });
 
       const result = await repository.findActiveJobByShop(mockShopId);
 
       expect(mockModel.findOne).toHaveBeenCalledWith({
         shop_id: mockShopId,
-        status: { $in: [ImportJobStatus.PENDING, ImportJobStatus.PROCESSING] },
+        $or: [
+          { status: ImportJobStatus.PENDING },
+          {
+            status: ImportJobStatus.PROCESSING,
+            $or: [{ locked_until: null }, { locked_until: { $gt: expect.any(Date) } }],
+          },
+        ],
       });
+      expect(sortMock).toHaveBeenCalledWith({ created_at: -1 });
       expect(result).toBeNull();
     });
   });

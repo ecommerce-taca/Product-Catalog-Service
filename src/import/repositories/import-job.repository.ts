@@ -28,10 +28,19 @@ export class MongoImportJobRepository
     shopId: string,
     session?: ClientSession,
   ): Promise<ImportJobDocument | null> {
-    const query = this.model.findOne({
-      shop_id: shopId,
-      status: { $in: [ImportJobStatus.PENDING, ImportJobStatus.PROCESSING] },
-    });
+    const now = new Date();
+    const query = this.model
+      .findOne({
+        shop_id: shopId,
+        $or: [
+          { status: ImportJobStatus.PENDING },
+          {
+            status: ImportJobStatus.PROCESSING,
+            $or: [{ locked_until: null }, { locked_until: { $gt: now } }],
+          },
+        ],
+      })
+      .sort({ created_at: -1 });
     if (session) {
       query.session(session);
     }

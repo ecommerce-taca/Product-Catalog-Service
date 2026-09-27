@@ -610,84 +610,147 @@ export class ImportWorkerService {
     }
 
     if (validSpus.length > 0) {
-      await this.transactionRunner.execute(async (session) => {
-        for (const spu of validSpus) {
-          const productId = uuidv7();
-          const cleanTitle = spu.title.trim();
-          const slug = generateImportSlug(cleanTitle, productId);
-          const sanitizedDesc = spu.description
-            ? sanitizeHtml(spu.description, STRICT_SANITIZE_OPTIONS)
-            : null;
+      try {
+        await this.transactionRunner.execute(async (session) => {
+          for (const spu of validSpus) {
+            const productId = uuidv7();
+            const cleanTitle = spu.title.trim();
+            const slug = generateImportSlug(cleanTitle, productId);
+            const sanitizedDesc = spu.description
+              ? sanitizeHtml(spu.description, STRICT_SANITIZE_OPTIONS)
+              : null;
 
-          // Compute price summary
-          const minPrice = Math.min(...spu.skus.map((s) => s.price));
-          const priceSummary: ProductPriceSummary = {
-            base_price: BigInt(minPrice),
-            sale_price: BigInt(minPrice),
-            currency: 'VND',
-          };
+            // Compute price summary
+            const minPrice = Math.min(...spu.skus.map((s) => s.price));
+            const priceSummary: ProductPriceSummary = {
+              base_price: BigInt(minPrice),
+              sale_price: BigInt(minPrice),
+              currency: 'VND',
+            };
 
-          // 1. Insert product (100% DRAFT - BR-IM-03, AC-IM-15)
-          await this.productRepo.create(
-            {
-              _id: productId,
-              shop_id: job.shop_id,
-              title: cleanTitle,
-              slug,
-              description: sanitizedDesc,
-              brand: spu.brand || null,
-              price_summary: priceSummary,
-              status: ProductStatus.DRAFT,
-              primary_category_id: spu.categoryId,
-              shop_snapshot: null,
-              rating_summary: null,
-              published_at: null,
-              unpublished_at: null,
-              archived_at: null,
-              blocked_at: null,
-              block_reason: null,
-              version: BigInt(1),
-            },
-            session,
-          );
-
-          // 2. Insert SKUs (status: ACTIVE)
-          for (const sku of spu.skus) {
-            const skuId = uuidv7();
-            await this.skuRepo.create(
+            // 1. Insert product (100% DRAFT - BR-IM-03, AC-IM-15)
+            await this.productRepo.create(
               {
-                _id: skuId,
-                product_id: productId,
+                _id: productId,
                 shop_id: job.shop_id,
-                seller_sku: sku.sellerSku,
-                attributes: sku.attributes,
-                variant_key: sku.variantKey,
-                price_override: BigInt(sku.price),
-                status: SkuStatus.ACTIVE,
-                media_ids: [],
+                title: cleanTitle,
+                slug,
+                description: sanitizedDesc,
+                brand: spu.brand || null,
+                price_summary: priceSummary,
+                status: ProductStatus.DRAFT,
+                primary_category_id: spu.categoryId,
+                shop_snapshot: null,
+                rating_summary: null,
+                published_at: null,
+                unpublished_at: null,
+                archived_at: null,
+                blocked_at: null,
+                block_reason: null,
                 version: BigInt(1),
               },
               session,
             );
 
-            // Outbox event for SKU
+            // 2. Insert SKUs (status: ACTIVE)
+            for (const sku of spu.skus) {
+              const skuId = uuidv7();
+              await this.skuRepo.create(
+                {
+                  _id: skuId,
+                  product_id: productId,
+                  shop_id: job.shop_id,
+                  seller_sku: sku.sellerSku,
+                  attributes: sku.attributes,
+                  variant_key: sku.variantKey,
+                  price_override: BigInt(sku.price),
+                  status: SkuStatus.ACTIVE,
+                  media_ids: [],
+                  version: BigInt(1),
+                },
+                session,
+              );
+
+              // Outbox event for SKU
+              await this.outboxRepo.saveEvent(
+                {
+                  _id: uuidv7(),
+                  event_id: uuidv7(),
+                  aggregate_type: AggregateType.SKU,
+                  aggregate_id: skuId,
+                  event_type: 'sku.created',
+                  schema_version: 1,
+                  payload: {
+                    sku_id: skuId,
+                    product_id: productId,
+                    shop_id: job.shop_id,
+                    seller_sku: sku.sellerSku,
+                    variant_key: sku.variantKey,
+                    status: SkuStatus.ACTIVE,
+                  },
+                  topic: 'sku.events.v1',
+                  version: BigInt(1),
+                  actor_user_id: job.actor_user_id || null,
+                  traceparent: TraceContextStorage.getTraceparent() || null,
+                },
+                session,
+              );
+            }
+
+            // 3. Insert primary product category
+            await this.productCategoryRepo.create(
+              {
+                _id: uuidv7(),
+                product_id: productId,
+                category_id: spu.categoryId,
+                is_primary: true,
+                assigned_at: new Date(),
+                assigned_by: job.actor_user_id || SYSTEM_ACTOR_ID,
+              },
+              session,
+            );
+
+            // 4. Insert downloaded media records (if any)
+            let isFirst = true;
+            for (const media of spu.downloadedMedia) {
+              await this.mediaRepo.create(
+                {
+                  _id: media.mediaId,
+                  product_id: productId,
+                  sku_id: null,
+                  scope: MediaScope.SPU,
+                  object_key: media.objectKey,
+                  content_type: media.contentType,
+                  size_bytes: media.sizeBytes,
+                  sha256: media.sha256,
+                  sort_order: 0,
+                  is_cover: isFirst,
+                  status: MediaStatus.READY,
+                  uploaded_by: job.actor_user_id || SYSTEM_ACTOR_ID,
+                },
+                session,
+              );
+              isFirst = false;
+            }
+
+            // 5. Outbox event for Product (product.created CDC)
             await this.outboxRepo.saveEvent(
               {
                 _id: uuidv7(),
                 event_id: uuidv7(),
-                aggregate_type: AggregateType.SKU,
-                aggregate_id: skuId,
-                event_type: 'sku.created',
+                aggregate_type: AggregateType.PRODUCT,
+                aggregate_id: productId,
+                event_type: 'product.created',
                 schema_version: 1,
                 payload: {
-                  sku_id: skuId,
                   product_id: productId,
                   shop_id: job.shop_id,
-                  seller_sku: sku.sellerSku,
-                  variant_key: sku.variantKey,
-                  status: SkuStatus.ACTIVE,
+                  slug,
+                  title: cleanTitle,
+                  status: ProductStatus.DRAFT,
+                  version: 1,
                 },
-                topic: 'sku.events.v1',
+                topic: 'product.events.v1',
                 version: BigInt(1),
                 actor_user_id: job.actor_user_id || null,
                 traceparent: TraceContextStorage.getTraceparent() || null,
@@ -695,69 +758,30 @@ export class ImportWorkerService {
               session,
             );
           }
-
-          // 3. Insert primary product category
-          await this.productCategoryRepo.create(
-            {
-              _id: uuidv7(),
-              product_id: productId,
-              category_id: spu.categoryId,
-              is_primary: true,
-              assigned_at: new Date(),
-              assigned_by: job.actor_user_id || SYSTEM_ACTOR_ID,
-            },
-            session,
-          );
-
-          // 4. Insert downloaded media records (if any)
-          let isFirst = true;
-          for (const media of spu.downloadedMedia) {
-            await this.mediaRepo.create(
-              {
-                _id: media.mediaId,
-                product_id: productId,
-                sku_id: null,
-                scope: MediaScope.SPU,
-                object_key: media.objectKey,
-                content_type: media.contentType,
-                size_bytes: media.sizeBytes,
-                sha256: media.sha256,
-                sort_order: 0,
-                is_cover: isFirst,
-                status: MediaStatus.READY,
-                uploaded_by: job.actor_user_id || SYSTEM_ACTOR_ID,
-              },
-              session,
-            );
-            isFirst = false;
-          }
-
-          // 5. Outbox event for Product (product.created CDC)
-          await this.outboxRepo.saveEvent(
-            {
-              _id: uuidv7(),
-              event_id: uuidv7(),
-              aggregate_type: AggregateType.PRODUCT,
-              aggregate_id: productId,
-              event_type: 'product.created',
-              schema_version: 1,
-              payload: {
-                product_id: productId,
-                shop_id: job.shop_id,
-                slug,
-                title: cleanTitle,
-                status: ProductStatus.DRAFT,
-                version: 1,
-              },
-              topic: 'product.events.v1',
-              version: BigInt(1),
-              actor_user_id: job.actor_user_id || null,
-              traceparent: TraceContextStorage.getTraceparent() || null,
-            },
-            session,
-          );
+        });
+      } catch (err: unknown) {
+        const errorMsg = (err as Error)?.message || String(err);
+        this.logger.error(
+          `Stage 3 transaction failed for import job ${jobId}: ${errorMsg}`,
+          (err as Error)?.stack,
+        );
+        job.status = ImportJobStatus.FAILED;
+        job.locked_until = null;
+        job.completed_at = new Date();
+        if (!job.error_summary) {
+          job.error_summary = [];
         }
-      });
+        job.error_summary.push({
+          row_index: 0,
+          product_ref_id: 'SYSTEM',
+          error_code: 'DATABASE_TRANSACTION_FAILED',
+          error_message:
+            'Không thể ghi nhận sản phẩm vào cơ sở dữ liệu: ' +
+            ((err as Error)?.message || String(err)),
+        });
+        await job.save();
+        return;
+      }
     }
 
     // Combine error details and media warnings (sanitized against Formula Injection CWE-1236)

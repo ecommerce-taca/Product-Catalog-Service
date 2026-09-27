@@ -37,6 +37,7 @@ describe('SellerImportController - POST /seller/products/import', () => {
   const mockImportJobRepository = {
     findActiveJobByShop: jest.fn(),
     create: jest.fn(),
+    reclaimStaleJobs: jest.fn().mockResolvedValue(0),
   };
 
   const mockImportWorkerService = {
@@ -130,6 +131,7 @@ describe('SellerImportController - POST /seller/products/import', () => {
       validXlsxBuffer,
       validFile.mimetype,
     );
+    expect(mockImportJobRepository.reclaimStaleJobs).toHaveBeenCalled();
     expect(mockImportJobRepository.create).toHaveBeenCalledWith(
       expect.objectContaining({
         shop_id: activeActor.shopScope,

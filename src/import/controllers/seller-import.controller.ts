@@ -186,6 +186,9 @@ export class SellerImportController {
     }
 
     // 5. Tenant Throttle: Check active job (BR-IM-06, AC-IM-07)
+    // Reclaim stale/zombie jobs whose lease expired before checking active jobs
+    await this.importJobRepo.reclaimStaleJobs();
+
     const activeJob = await this.importJobRepo.findActiveJobByShop(actorShopScope);
     if (activeJob) {
       throw new ConflictException({

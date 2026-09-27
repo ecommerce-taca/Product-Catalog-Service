@@ -53,9 +53,17 @@ export class MediaDownloadService {
     try {
       const response = await fetch(trimmedUrl, {
         signal: controller.signal,
-        redirect: 'follow',
+        redirect: 'manual',
       });
       clearTimeout(timeoutId);
+
+      if ((response.status >= 300 && response.status < 400) || response.type === 'opaqueredirect') {
+        const err = new Error(
+          'Không thể tải ảnh: URL chuyển hướng (Redirect) không được hỗ trợ để đảm bảo an toàn bảo mật.',
+        );
+        (err as unknown as { code: string }).code = 'MEDIA_DOWNLOAD_FAILED';
+        throw err;
+      }
 
       if (!response.ok) {
         const err = new Error(`HTTP ${response.status} (${response.statusText})`);
