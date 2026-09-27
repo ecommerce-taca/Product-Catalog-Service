@@ -32,9 +32,9 @@ export class SkuItemDto {
   attributes: Record<string, string | number | boolean>;
 
   @IsOptional()
-  @IsInt()
-  @Min(1)
-  @Max(999999999999)
+  @IsInt({ message: 'Giá tiền phải là số nguyên' })
+  @Min(1, { message: 'Giá tiền không được nhỏ hơn 1' })
+  @Max(999999999999, { message: 'Giá tiền không được lớn hơn 999999999999' })
   price_override?: number | null;
 
   @IsOptional()

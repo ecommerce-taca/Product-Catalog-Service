@@ -386,6 +386,16 @@ async function run() {
     `Stock status: ${res.data?.data?.stock_display?.status}`,
   );
 
+  // Test 6.7: Edge Case: DoS Protection - Giới hạn kích thước trang (size > 100)
+  res = await request('GET', `${BASE_PATH}/products?size=150`);
+  console.log(`[6.7] Edge Case size > 100 => ${res.status}`, res.data?.error?.code);
+
+  // Test 6.8: Edge Case: DoS Protection - Batch Hydration vượt quá 100 IDs
+  const excessIds = Array.from({ length: 101 }, (_, i) => `id${i + 1}`).join(',');
+  res = await request('GET', `${BASE_PATH}/products?product_ids=${excessIds}`);
+  console.log(`[6.8] Edge Case product_ids > 100 => ${res.status}`, res.data?.error?.code);
+
+
   // Test 7.1: Seller Export
   res = await request('GET', `${BASE_PATH}/seller/products/export`, sellerHeaders);
   console.log(
@@ -495,28 +505,22 @@ async function run() {
   );
   console.log(`[9.5] Security Suspended Shop Block => ${res.status}`, res.data?.error?.code);
 
-  // Test 10.1: Bulk Import Template (Default / No category)
-  res = await request('GET', `${BASE_PATH}/seller/products/import/template`, {
-    ...sellerHeaders,
-    Accept: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-  });
+  // Test 10.1: Bulk Import Template (JSON Presigned URL - Default / No category)
+  res = await request('GET', `${BASE_PATH}/seller/products/import/template`, sellerHeaders);
   console.log(
     `[10.1] GET /seller/products/import/template (default) => ${res.status}`,
-    `Content-Type: ${res.headers?.['content-type']}`,
+    `Download URL: ${res.data?.data?.download_url || res.data?.download_url}`,
   );
 
   // Test 10.2: Bulk Import Template (With valid category_id)
   res = await request(
     'GET',
     `${BASE_PATH}/seller/products/import/template?category_id=${subCatId}`,
-    {
-      ...sellerHeaders,
-      Accept: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    },
+    sellerHeaders,
   );
   console.log(
     `[10.2] GET /seller/products/import/template?category_id=${subCatId} => ${res.status}`,
-    `Content-Type: ${res.headers?.['content-type']}`,
+    `Download URL: ${res.data?.data?.download_url || res.data?.download_url}`,
   );
 
   // Test 10.3: Bulk Import Template (Non-existent category_id)

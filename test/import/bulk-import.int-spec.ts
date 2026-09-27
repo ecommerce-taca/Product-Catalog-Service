@@ -623,6 +623,11 @@ describe('Bulk Product Import Integration Spec [PCAT-IMP-05]', () => {
         };
       }),
     },
+    verifyObjectUploaded: jest.fn(async (key: string) => {
+      const cleanKey = key.replace(/^\//, '');
+      const has = s3StorageMap.has(cleanKey);
+      return { verified: has, actualSize: has ? s3StorageMap.get(cleanKey)!.length : 0 };
+    }),
     uploadBuffer: jest.fn(async (key: string, buffer: Buffer, _contentType?: string) => {
       s3StorageMap.set(key.replace(/^\//, ''), buffer);
     }),
@@ -835,23 +840,24 @@ describe('Bulk Product Import Integration Spec [PCAT-IMP-05]', () => {
   // ==========================================================================
   describe('Nhóm 1: Dynamic Template Engine (FR-IM-01)', () => {
     it('[AC-IM-01] GET /seller/products/import/template: tải template hợp lệ kèm Data Validation dropdown ENUM', async () => {
+      // 1. Default request returns JSON envelope with Presigned Download URL and caches on MinIO
       const res = await request(app.getHttpServer())
         .get(`/seller/products/import/template?category_id=${catFashion}`)
-        .set(sellerAHeaders)
-        .buffer(true)
-        .parse(binaryParser);
+        .set(sellerAHeaders);
 
       expect(res.status).toBe(200);
-      expect(res.headers['content-type']).toContain(
-        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      );
-      expect(res.headers['content-disposition']).toContain(
-        `filename="product_import_template_${catFashion}.xlsx"`,
-      );
+      expect(res.body.data.download_url).toBeDefined();
+      expect(res.body.data.filename).toBe(`product_import_template_${catFashion}.xlsx`);
 
-      // Verify Excel contents
+      const s3Key = `templates/product_import_template_${catFashion}.xlsx`;
+      expect(s3StorageMap.has(s3Key)).toBe(true);
+
+      // Verify Excel contents from MinIO storage
+      const storedBuffer = s3StorageMap.get(s3Key);
+      expect(storedBuffer).toBeDefined();
+
       const wb = new ExcelJS.Workbook();
-      await wb.xlsx.load(res.body);
+      await (wb.xlsx as any).load(storedBuffer!);
 
       const sheet1 = wb.getWorksheet('Sản phẩm & Biến thể');
       const sheet2 = wb.getWorksheet('Hướng dẫn & Danh mục');
@@ -884,6 +890,31 @@ describe('Bulk Product Import Integration Spec [PCAT-IMP-05]', () => {
       expect(cellRow2.dataValidation).toBeDefined();
       expect(cellRow2.dataValidation?.type).toBe('list');
       expect(cellRow2.dataValidation?.formulae?.[0]).toContain('Đỏ');
+
+      // 2. Subsequent call returns cached MinIO URL directly
+      const resCached = await request(app.getHttpServer())
+        .get(`/seller/products/import/template?category_id=${catFashion}`)
+        .set(sellerAHeaders);
+      expect(resCached.status).toBe(200);
+      expect(resCached.body.data.download_url).toBe(res.body.data.download_url);
+
+      // 3. Backwards compatibility: direct binary stream when Accept header requests it
+      const resBinary = await request(app.getHttpServer())
+        .get(`/seller/products/import/template?category_id=${catFashion}`)
+        .set({
+          ...sellerAHeaders,
+          Accept: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        })
+        .buffer(true)
+        .parse(binaryParser);
+
+      expect(resBinary.status).toBe(200);
+      expect(resBinary.headers['content-type']).toContain(
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      );
+      expect(resBinary.headers['content-disposition']).toContain(
+        `filename="product_import_template_${catFashion}.xlsx"`,
+      );
     });
 
     it('[AC-IM-02] Shop bị SUSPENDED cố tải template -> từ chối 403 PRODUCT_SHOP_SUSPENDED', async () => {

@@ -1,4 +1,4 @@
-import { BadRequestException, Inject, Injectable } from '@nestjs/common';
+import { BadRequestException, Inject, Injectable, Logger } from '@nestjs/common';
 import * as ExcelJS from 'exceljs';
 import { CategoryDocument, CategoryStatus } from '../../database/schemas/category.schema';
 import {
@@ -9,15 +9,71 @@ import {
 } from '../../database/schemas/attribute-definition.schema';
 import { CategoryRepositoryPort } from '../../category/repositories/category.repository.interface';
 import { AttributeDefinitionRepositoryPort } from '../../attribute/repositories/attribute-definition.repository.interface';
+import { S3StorageService } from '../../integrations/storage/s3-storage.service';
+
+export interface TemplatePresignedResult {
+  downloadUrl: string;
+  filename: string;
+  expiresAt: Date;
+}
 
 @Injectable()
 export class ExcelTemplateService {
+  private readonly logger = new Logger(ExcelTemplateService.name);
+
   constructor(
     @Inject('CategoryRepositoryPort')
     private readonly categoryRepository: CategoryRepositoryPort,
     @Inject('AttributeDefinitionRepositoryPort')
     private readonly attributeDefinitionRepository: AttributeDefinitionRepositoryPort,
+    private readonly storageService: S3StorageService,
   ) {}
+
+  /**
+   * Retrieves an existing Excel template from MinIO S3 via Presigned Download URL.
+   * If the template does not exist on MinIO yet, initializes and uploads it once.
+   */
+  async getOrInitTemplate(categoryId?: string): Promise<TemplatePresignedResult> {
+    if (categoryId) {
+      const category = await this.categoryRepository.findById(categoryId);
+      if (!category || category.status !== CategoryStatus.ACTIVE) {
+        throw new BadRequestException({
+          code: 'PRODUCT_CATEGORY_INVALID',
+          message: `Danh mục '${categoryId}' không tồn tại hoặc không ở trạng thái ACTIVE.`,
+        });
+      }
+    }
+
+    const filename = `product_import_template_${categoryId || 'default'}.xlsx`;
+    const s3Key = `templates/${filename}`;
+
+    // 1. Check if template already exists on MinIO
+    const check = await this.storageService.verifyObjectUploaded(s3Key);
+
+    // 2. Initialize and upload if not yet present
+    if (!check.verified) {
+      this.logger.log(
+        `Template '${s3Key}' not found on MinIO. Initializing clean template buffer...`,
+      );
+      const buffer = await this.generateTemplate(categoryId);
+      await this.storageService.uploadBuffer(
+        s3Key,
+        buffer,
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        `attachment; filename="${filename}"`,
+      );
+      this.logger.log(`Template '${s3Key}' successfully initialized and uploaded to MinIO.`);
+    }
+
+    // 3. Generate presigned download URL (TTL 1 hour)
+    const presigned = await this.storageService.generatePresignedDownloadUrl(s3Key, 3600);
+
+    return {
+      downloadUrl: presigned.downloadUrl,
+      filename,
+      expiresAt: presigned.expiresAt,
+    };
+  }
 
   /**
    * Generates a dynamic Excel workbook template for bulk product import.
@@ -133,10 +189,8 @@ export class ExcelTemplateService {
     });
 
     // Configure number formats for price columns (columns 8 and 9)
-    for (let r = 2; r <= 201; r++) {
-      sheet1.getCell(r, 8).numFmt = '#,##0';
-      sheet1.getCell(r, 9).numFmt = '#,##0';
-    }
+    sheet1.getColumn(8).numFmt = '#,##0';
+    sheet1.getColumn(9).numFmt = '#,##0';
 
     // -------------------------------------------------------------
     // SHEET 2: "Hướng dẫn & Danh mục"
@@ -215,7 +269,7 @@ export class ExcelTemplateService {
     });
 
     // Add empty separator row
-    sheet2.addRow({});
+    sheet2.addRow({ section: '', rule: '', example: '' });
 
     // Add Category References Section Header
     const catHeaderRow = sheet2.addRow({

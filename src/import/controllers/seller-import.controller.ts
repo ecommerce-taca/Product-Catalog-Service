@@ -34,6 +34,7 @@ import {
   ShopSnapshotRepositoryPort,
 } from '../../projections/repositories/shop-snapshot.repository.interface';
 import { S3StorageService } from '../../integrations/storage/s3-storage.service';
+import { TraceContextStorage } from '../../common/context/trace-context.storage';
 
 import { ImportJobRepositoryPort } from '../repositories/import-job.repository.interface';
 import { ExcelTemplateService } from '../services/excel-template.service';
@@ -76,8 +77,10 @@ export class SellerImportController {
   ) {}
 
   /**
-   * Downloads an Excel template (.xlsx) for bulk product import.
-   * If category_id is provided, dynamic attributes with dropdown validation are attached.
+   * Downloads an Excel template (.xlsx) for bulk product import (FR-IM-01).
+   * Checks MinIO cache first; initializes and uploads if not yet present.
+   * By default, returns a JSON envelope containing the Presigned Download URL.
+   * If client explicitly requests binary stream (via Accept header), streams the file.
    * Enforces shop status check: SUSPENDED shops are rejected with 403 PRODUCT_SHOP_SUSPENDED (BR-IM-01).
    */
   @Get('template')
@@ -87,6 +90,7 @@ export class SellerImportController {
     @ShopScope() shopScope: string,
     @Actor() actor: ActorContext,
     @Res() res: Response,
+    @Req() req?: Request,
   ): Promise<void> {
     const actorShopScope = shopScope || actor?.shopScope;
     if (!actorShopScope) {
@@ -108,16 +112,39 @@ export class SellerImportController {
       });
     }
 
-    const buffer = await this.excelTemplateService.generateTemplate(query.category_id);
-    const filename = `product_import_template_${query.category_id || 'default'}.xlsx`;
+    const templateResult = await this.excelTemplateService.getOrInitTemplate(query.category_id);
 
-    res.set({
-      'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      'Content-Disposition': `attachment; filename="${filename}"`,
-      'Content-Length': buffer.length.toString(),
+    const acceptHeader = (req?.headers?.accept || '').toLowerCase();
+    const wantsBinary =
+      acceptHeader.includes('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet') ||
+      acceptHeader.includes('application/octet-stream');
+
+    if (wantsBinary) {
+      const buffer = await this.excelTemplateService.generateTemplate(query.category_id);
+      res.set({
+        'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'Content-Disposition': `attachment; filename="${templateResult.filename}"`,
+        'Content-Length': buffer.length.toString(),
+      });
+      res.status(HttpStatus.OK).send(buffer);
+      return;
+    }
+
+    const resultData = {
+      download_url: templateResult.downloadUrl,
+      filename: templateResult.filename,
+      expires_at: templateResult.expiresAt,
+    };
+
+    const requestId =
+      TraceContextStorage.getRequestId() || (req?.headers?.['x-request-id'] as string) || '';
+    res.status(HttpStatus.OK).json({
+      data: resultData,
+      meta: {
+        request_id: requestId,
+        as_of: new Date().toISOString(),
+      },
     });
-
-    res.status(HttpStatus.OK).send(buffer);
   }
 
   /**

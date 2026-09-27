@@ -9,6 +9,8 @@ import {
   AttributeType,
 } from '../../src/database/schemas/attribute-definition.schema';
 
+import { S3StorageService } from '../../src/integrations/storage/s3-storage.service';
+
 describe('ExcelTemplateService', () => {
   let service: ExcelTemplateService;
 
@@ -19,6 +21,12 @@ describe('ExcelTemplateService', () => {
 
   const mockAttributeDefinitionRepository = {
     findByScope: jest.fn(),
+  };
+
+  const mockS3StorageService = {
+    verifyObjectUploaded: jest.fn(),
+    uploadBuffer: jest.fn(),
+    generatePresignedDownloadUrl: jest.fn(),
   };
 
   const sampleCategory = {
@@ -77,6 +85,7 @@ describe('ExcelTemplateService', () => {
           provide: 'AttributeDefinitionRepositoryPort',
           useValue: mockAttributeDefinitionRepository,
         },
+        { provide: S3StorageService, useValue: mockS3StorageService },
       ],
     }).compile();
 
@@ -216,6 +225,71 @@ describe('ExcelTemplateService', () => {
         const res = error.getResponse() as Record<string, unknown>;
         expect(res.code).toBe('PRODUCT_CATEGORY_INVALID');
       }
+    });
+  });
+
+  describe('getOrInitTemplate', () => {
+    it('should initialize and upload template to MinIO when it does not exist', async () => {
+      mockS3StorageService.verifyObjectUploaded.mockResolvedValue({ verified: false });
+      mockS3StorageService.uploadBuffer.mockResolvedValue(undefined);
+      mockS3StorageService.generatePresignedDownloadUrl.mockResolvedValue({
+        downloadUrl:
+          'http://localhost:9000/taca-product-media-prod/templates/product_import_template_default.xlsx?sig=123',
+        expiresAt: new Date(Date.now() + 3600000),
+      });
+
+      mockCategoryRepository.findAllPaginated.mockResolvedValue({
+        items: [sampleCategory],
+        total: 1,
+      });
+
+      const result = await service.getOrInitTemplate();
+
+      expect(mockS3StorageService.verifyObjectUploaded).toHaveBeenCalledWith(
+        'templates/product_import_template_default.xlsx',
+      );
+      expect(mockS3StorageService.uploadBuffer).toHaveBeenCalledWith(
+        'templates/product_import_template_default.xlsx',
+        expect.any(Buffer),
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'attachment; filename="product_import_template_default.xlsx"',
+      );
+      expect(mockS3StorageService.generatePresignedDownloadUrl).toHaveBeenCalledWith(
+        'templates/product_import_template_default.xlsx',
+        3600,
+      );
+      expect(result.downloadUrl).toContain('product_import_template_default.xlsx');
+      expect(result.filename).toBe('product_import_template_default.xlsx');
+    });
+
+    it('should return presigned URL directly from MinIO when template already exists (no re-generation)', async () => {
+      mockS3StorageService.verifyObjectUploaded.mockResolvedValue({
+        verified: true,
+        actualSize: 11000,
+      });
+      mockS3StorageService.generatePresignedDownloadUrl.mockResolvedValue({
+        downloadUrl:
+          'http://localhost:9000/taca-product-media-prod/templates/product_import_template_default.xlsx?sig=cached',
+        expiresAt: new Date(Date.now() + 3600000),
+      });
+
+      const result = await service.getOrInitTemplate();
+
+      expect(mockS3StorageService.verifyObjectUploaded).toHaveBeenCalledWith(
+        'templates/product_import_template_default.xlsx',
+      );
+      expect(mockS3StorageService.uploadBuffer).not.toHaveBeenCalled();
+      expect(mockS3StorageService.generatePresignedDownloadUrl).toHaveBeenCalledWith(
+        'templates/product_import_template_default.xlsx',
+        3600,
+      );
+      expect(result.downloadUrl).toContain('sig=cached');
+    });
+
+    it('should reject with 400 when categoryId does not exist or is INACTIVE', async () => {
+      mockCategoryRepository.findById.mockResolvedValue(null);
+
+      await expect(service.getOrInitTemplate('invalid-cat')).rejects.toThrow(BadRequestException);
     });
   });
 });

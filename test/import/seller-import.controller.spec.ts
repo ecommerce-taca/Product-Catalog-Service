@@ -24,6 +24,7 @@ describe('SellerImportController', () => {
 
   const mockExcelTemplateService = {
     generateTemplate: jest.fn(),
+    getOrInitTemplate: jest.fn(),
   };
 
   const mockShopSnapshotRepository = {
@@ -35,8 +36,11 @@ describe('SellerImportController', () => {
     res.set = jest.fn().mockReturnValue(res);
     res.status = jest.fn().mockReturnValue(res);
     res.send = jest.fn().mockReturnValue(res);
+    res.json = jest.fn().mockReturnValue(res);
     return res as Response;
   };
+
+  const mockRequest = (headers: Record<string, string> = {}) => ({ headers }) as unknown as Request;
 
   const activeActor: ActorContext = {
     userId: '01912f10-0001-7000-8000-000000000001',
@@ -89,53 +93,72 @@ describe('SellerImportController', () => {
   });
 
   describe('GET /seller/products/import/template', () => {
-    it('should generate template, set attachment headers and send buffer (AC-IM-01)', async () => {
-      const dummyBuffer = Buffer.from('mock excel binary');
+    it('should get or init template and return JSON envelope with presigned URL (AC-IM-01)', async () => {
       mockShopSnapshotRepository.findByShopId.mockResolvedValue({
         shop_id: activeActor.shopScope,
         shop_status: ShopStatus.ACTIVE,
       });
-      mockExcelTemplateService.generateTemplate.mockResolvedValue(dummyBuffer);
+      mockExcelTemplateService.getOrInitTemplate.mockResolvedValue({
+        downloadUrl:
+          'http://localhost:9000/taca-product-media-prod/templates/product_import_template_01912f20-0000-7000-8000-000000000001.xlsx',
+        filename: 'product_import_template_01912f20-0000-7000-8000-000000000001.xlsx',
+        expiresAt: new Date(),
+      });
 
+      const req = mockRequest();
       const res = mockResponse();
       await controller.downloadTemplate(
         { category_id: '01912f20-0000-7000-8000-000000000001' },
         activeActor.shopScope!,
         activeActor,
         res,
+        req as any,
       );
 
       expect(mockShopSnapshotRepository.findByShopId).toHaveBeenCalledWith(activeActor.shopScope);
-      expect(mockExcelTemplateService.generateTemplate).toHaveBeenCalledWith(
+      expect(mockExcelTemplateService.getOrInitTemplate).toHaveBeenCalledWith(
         '01912f20-0000-7000-8000-000000000001',
       );
-      expect(res.set).toHaveBeenCalledWith({
-        'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        'Content-Disposition':
-          'attachment; filename="product_import_template_01912f20-0000-7000-8000-000000000001.xlsx"',
-        'Content-Length': dummyBuffer.length.toString(),
-      });
       expect(res.status).toHaveBeenCalledWith(HttpStatus.OK);
-      expect(res.send).toHaveBeenCalledWith(dummyBuffer);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            download_url: expect.stringContaining(
+              'product_import_template_01912f20-0000-7000-8000-000000000001.xlsx',
+            ),
+            filename: 'product_import_template_01912f20-0000-7000-8000-000000000001.xlsx',
+          }),
+        }),
+      );
     });
 
-    it('should generate default template filename when no category_id is provided', async () => {
-      const dummyBuffer = Buffer.from('mock default excel binary');
+    it('should stream binary buffer when client explicitly requests binary spreadsheet in Accept header', async () => {
+      const dummyBuffer = Buffer.from('mock excel binary');
       mockShopSnapshotRepository.findByShopId.mockResolvedValue({
         shop_id: activeActor.shopScope,
         shop_status: ShopStatus.ACTIVE,
       });
+      mockExcelTemplateService.getOrInitTemplate.mockResolvedValue({
+        downloadUrl: 'http://localhost:9000/templates/default.xlsx',
+        filename: 'product_import_template_default.xlsx',
+        expiresAt: new Date(),
+      });
       mockExcelTemplateService.generateTemplate.mockResolvedValue(dummyBuffer);
 
+      const req = mockRequest({
+        accept: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      });
       const res = mockResponse();
-      await controller.downloadTemplate({}, activeActor.shopScope!, activeActor, res);
+      await controller.downloadTemplate({}, activeActor.shopScope!, activeActor, res, req as any);
 
       expect(mockExcelTemplateService.generateTemplate).toHaveBeenCalledWith(undefined);
-      expect(res.set).toHaveBeenCalledWith(
-        expect.objectContaining({
-          'Content-Disposition': 'attachment; filename="product_import_template_default.xlsx"',
-        }),
-      );
+      expect(res.set).toHaveBeenCalledWith({
+        'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'Content-Disposition': 'attachment; filename="product_import_template_default.xlsx"',
+        'Content-Length': dummyBuffer.length.toString(),
+      });
+      expect(res.status).toHaveBeenCalledWith(HttpStatus.OK);
+      expect(res.send).toHaveBeenCalledWith(dummyBuffer);
     });
 
     it('should throw 403 PRODUCT_SHOP_SUSPENDED when shop is SUSPENDED (AC-IM-02, BR-IM-01)', async () => {

@@ -487,7 +487,7 @@ Accept: application/json
 
 ### [6.4] Public - Chi tiết sản phẩm PDP (Product Detail Page)
 # Bao gồm: Shop snapshot, Category tax rate kế thừa, Dynamic attributes, SKUs & stock projection
-GET {{baseUrl}}/products/{{createProductDraft.response.body.data.product_id}}
+GET {{baseUrl}}/products/01a0e163-9ed9-73ff-887e-93e0034a35e6
 Accept: application/json
 
 ### [6.5] Public - Danh sách sản phẩm theo Shop
@@ -506,7 +506,7 @@ Accept: application/json
 
 ### [6.8] Edge Case: DoS Protection - Batch Hydration vượt quá 100 IDs
 # Mong đợi: 400 Bad Request (PRODUCT_INVALID_INPUT)
-GET {{baseUrl}}/products?product_ids=id1,id2,...,id101
+GET {{baseUrl}}/products?product_ids=id1,id2,id3,id4,id5,id6,id7,id8,id9,id10,id11,id12,id13,id14,id15,id16,id17,id18,id19,id20,id21,id22,id23,id24,id25,id26,id27,id28,id29,id30,id31,id32,id33,id34,id35,id36,id37,id38,id39,id40,id41,id42,id43,id44,id45,id46,id47,id48,id49,id50,id51,id52,id53,id54,id55,id56,id57,id58,id59,id60,id61,id62,id63,id64,id65,id66,id67,id68,id69,id70,id71,id72,id73,id74,id75,id76,id77,id78,id79,id80,id81,id82,id83,id84,id85,id86,id87,id88,id89,id90,id91,id92,id93,id94,id95,id96,id97,id98,id99,id100,id101
 Accept: application/json
 
 
@@ -555,31 +555,31 @@ x-user-id: {{adminId}}
 x-user-roles: {{adminRoles}}
 
 ### [8.3] Admin - Khóa sản phẩm vi phạm (Block Product: Yêu cầu version & reason)
-POST {{baseUrl}}/admin/catalog/products/{{createProductDraft.response.body.data.product_id}}/block
+POST {{baseUrl}}/admin/catalog/products/01a0e163-9ed9-73ff-887e-93e0034a35e6/block
 Content-Type: application/json
 Accept: application/json
 x-user-id: {{adminId}}
 x-user-roles: {{adminRoles}}
 
 {
-  "version": 4,
+  "version": 8,
   "reason": "Sản phẩm vi phạm bản quyền thương hiệu theo yêu cầu từ hãng."
 }
 
 ### [8.4] Public - Thử truy cập sản phẩm vừa bị Admin khóa (Zero Leak Check)
 # Mong đợi: 404 Not Found (PRODUCT_NOT_FOUND) - Khách không biết sản phẩm tồn tại hay bị khóa
-GET {{baseUrl}}/products/{{createProductDraft.response.body.data.product_id}}
+GET {{baseUrl}}/products/01a0e163-9ed9-73ff-887e-93e0034a35e6
 Accept: application/json
 
 ### [8.5] Admin - Mở khóa sản phẩm (Unblock Product: Chuyển về INACTIVE để Seller rà soát lại)
-POST {{baseUrl}}/admin/catalog/products/{{createProductDraft.response.body.data.product_id}}/unblock
+POST {{baseUrl}}/admin/catalog/products/01a0e163-9ed9-73ff-887e-93e0034a35e6/unblock
 Content-Type: application/json
 Accept: application/json
 x-user-id: {{adminId}}
 x-user-roles: {{adminRoles}}
 
 {
-  "version": 5,
+  "version": 9,
   "reason": "Đã xử lý và khắc phục vi phạm."
 }
 
@@ -641,17 +641,17 @@ x-user-shop-scope: {{suspendedShopScope}}
 ### ==============================================================================
 
 ### [10.1] Tải template mẫu mặc định (không truyền category_id)
-# Mong đợi: 200 OK kèm binary Excel .xlsx (Content-Type: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet)
+# Mong đợi: 200 OK kèm JSON chứa Presigned Download URL từ MinIO (hoặc binary nếu Accept: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet)
 GET {{baseUrl}}/seller/products/import/template
-Accept: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, application/json
+Accept: application/json
 x-user-id: {{sellerId}}
 x-user-roles: {{sellerRoles}}
 x-user-shop-scope: {{sellerShopScope}}
 
 ### [10.2] Tải template mẫu theo category_id hợp lệ (có dropdown validation cho ENUM)
-# Mong đợi: 200 OK kèm binary Excel .xlsx chứa các cột thuộc tính động
+# Mong đợi: 200 OK kèm JSON chứa Presigned Download URL từ MinIO
 GET {{baseUrl}}/seller/products/import/template?category_id={{categoryId}}
-Accept: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, application/json
+Accept: application/json
 x-user-id: {{sellerId}}
 x-user-roles: {{sellerRoles}}
 x-user-shop-scope: {{sellerShopScope}}
