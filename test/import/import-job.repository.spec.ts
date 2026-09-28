@@ -181,6 +181,7 @@ describe('MongoImportJobRepository', () => {
           $set: {
             status: ImportJobStatus.FAILED,
             completed_at: fixedNow,
+            error_count: 1,
           },
           $push: {
             error_summary: {

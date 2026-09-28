@@ -94,6 +94,7 @@ export class MongoImportJobRepository
       $set: {
         status: ImportJobStatus.FAILED,
         completed_at: now,
+        error_count: 1,
       },
       $push: {
         error_summary: {

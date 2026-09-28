@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
   DeleteObjectsCommand,
+  GetObjectCommand,
   HeadObjectCommand,
   PutObjectCommand,
   S3Client,
@@ -231,6 +232,27 @@ export class S3StorageService {
       ...(contentDisposition ? { ContentDisposition: contentDisposition } : {}),
     });
     await this.s3Client.send(command);
+  }
+
+  /**
+   * Downloads an object from S3 as a complete Buffer (SHOULD-FIX-01).
+   */
+  async downloadBuffer(objectKey: string): Promise<Buffer> {
+    const cleanKey = objectKey.replace(/^\//, '');
+    const command = new GetObjectCommand({
+      Bucket: this.bucket,
+      Key: cleanKey,
+    });
+    const response = await this.s3Client.send(command);
+    if (!response.Body) {
+      throw new Error(`S3 response body is empty for key: ${objectKey}`);
+    }
+    const chunks: Buffer[] = [];
+    const stream = response.Body as unknown as NodeJS.ReadableStream;
+    for await (const chunk of stream) {
+      chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : (chunk as Buffer));
+    }
+    return Buffer.concat(chunks);
   }
 
   /**

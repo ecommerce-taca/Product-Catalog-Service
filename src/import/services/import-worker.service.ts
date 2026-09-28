@@ -498,15 +498,10 @@ export class ImportWorkerService {
         if (refId) {
           try {
             let existingProduct: any = null;
-            if (UUID_REGEX.test(refId)) {
+            if (typeof this.productRepo.findByIdOrCode === 'function') {
+              existingProduct = await this.productRepo.findByIdOrCode(job.shop_id, refId);
+            } else if (UUID_REGEX.test(refId)) {
               existingProduct = await this.productRepo.findById(refId);
-            } else if (typeof (this.productRepo as any).findByShopAndIdOrCode === 'function') {
-              existingProduct = await (this.productRepo as any).findByShopAndIdOrCode(
-                job.shop_id,
-                refId,
-              );
-            } else if (typeof (this.productRepo as any).findByIdOrCode === 'function') {
-              existingProduct = await (this.productRepo as any).findByIdOrCode(job.shop_id, refId);
             } else {
               existingProduct = await this.productRepo.findOne({
                 shop_id: job.shop_id,
@@ -615,10 +610,10 @@ export class ImportWorkerService {
       for (const rawCatId of candidateCategoryIds) {
         let cat: any = null;
         try {
-          if (UUID_REGEX.test(rawCatId)) {
+          if (typeof this.categoryRepo.findByIdOrCode === 'function') {
+            cat = await this.categoryRepo.findByIdOrCode(rawCatId);
+          } else if (UUID_REGEX.test(rawCatId)) {
             cat = await this.categoryRepo.findById(rawCatId);
-          } else if (typeof (this.categoryRepo as any).findByIdOrCode === 'function') {
-            cat = await (this.categoryRepo as any).findByIdOrCode(rawCatId);
           } else {
             cat = await this.categoryRepo.findOne({ category_code: rawCatId.toUpperCase() });
           }
@@ -1076,6 +1071,9 @@ export class ImportWorkerService {
   }
 
   private async downloadBufferFromStorage(fileUrl: string): Promise<Buffer> {
+    if (typeof this.storageService.downloadBuffer === 'function') {
+      return this.storageService.downloadBuffer(fileUrl);
+    }
     const cleanKey = fileUrl.replace(/^\//, '');
     const command = new GetObjectCommand({
       Bucket: this.storageService.bucket,

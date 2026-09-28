@@ -93,6 +93,15 @@ describe('ExcelTemplateService', () => {
   beforeEach(async () => {
     jest.clearAllMocks();
 
+    mockCategoryRepository.findByIdOrCode.mockImplementation(async (idOrCode: string) => {
+      return mockCategoryRepository.findById(idOrCode);
+    });
+    mockProductRepository.findByIdOrCode.mockImplementation(
+      async (shopId: string, idOrCode: string) => {
+        return mockProductRepository.findByShopAndId(shopId, idOrCode);
+      },
+    );
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         ExcelTemplateService,

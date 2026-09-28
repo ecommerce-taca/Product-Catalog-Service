@@ -269,4 +269,39 @@ describe('S3StorageService', () => {
       expect(mockSend).toHaveBeenCalledTimes(1);
     });
   });
+
+  describe('downloadBuffer', () => {
+    it('should download object and concatenate stream chunks into Buffer', async () => {
+      const { Readable } = await import('stream');
+      const testData = Buffer.from('hello world s3 buffer');
+      const stream = new Readable();
+      stream.push(testData);
+      stream.push(null);
+
+      mockSend.mockResolvedValueOnce({
+        Body: stream,
+      });
+
+      const result = await service.downloadBuffer('test/key.xlsx');
+      expect(result).toEqual(testData);
+      expect(mockSend).toHaveBeenCalledWith(
+        expect.objectContaining({
+          input: expect.objectContaining({
+            Bucket: 'test-bucket',
+            Key: 'test/key.xlsx',
+          }),
+        }),
+      );
+    });
+
+    it('should throw error when S3 response body is empty', async () => {
+      mockSend.mockResolvedValueOnce({
+        Body: null,
+      });
+
+      await expect(service.downloadBuffer('test/key.xlsx')).rejects.toThrow(
+        'S3 response body is empty',
+      );
+    });
+  });
 });
