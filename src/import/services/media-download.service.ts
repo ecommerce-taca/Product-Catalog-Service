@@ -100,44 +100,56 @@ export class MediaDownloadService {
       }
 
       // 5. Download stream chunk-by-chunk with cumulative size verification
-      if (!response.body) {
+      let buffer: Buffer;
+
+      if (response.body && typeof response.body.getReader === 'function') {
+        const reader = response.body.getReader();
+        const chunks: Uint8Array[] = [];
+        let totalBytes = 0;
+
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) {
+              break;
+            }
+            if (value) {
+              totalBytes += value.length;
+              if (totalBytes > MAX_MEDIA_SIZE_BYTES) {
+                await reader.cancel();
+                const err = new Error(
+                  `Dung lượng hình ảnh vượt quá giới hạn 5MB (${totalBytes} bytes)`,
+                );
+                (err as unknown as { code: string }).code = 'MEDIA_DOWNLOAD_FAILED';
+                throw err;
+              }
+              chunks.push(value);
+            }
+          }
+        } catch (streamError: unknown) {
+          const err = streamError as Error & { code?: string };
+          if (err?.code === 'MEDIA_DOWNLOAD_FAILED') {
+            throw err;
+          }
+          throw streamError;
+        }
+
+        buffer = Buffer.concat(chunks);
+      } else if (typeof (response as any).arrayBuffer === 'function') {
+        const ab = await response.arrayBuffer();
+        if (ab.byteLength > MAX_MEDIA_SIZE_BYTES) {
+          const err = new Error(
+            `Dung lượng hình ảnh vượt quá giới hạn 5MB (${ab.byteLength} bytes)`,
+          );
+          (err as unknown as { code: string }).code = 'MEDIA_DOWNLOAD_FAILED';
+          throw err;
+        }
+        buffer = Buffer.from(ab);
+      } else {
         const err = new Error('Tệp hình ảnh rỗng (0 bytes)');
         (err as unknown as { code: string }).code = 'MEDIA_DOWNLOAD_FAILED';
         throw err;
       }
-
-      const reader = response.body.getReader();
-      const chunks: Uint8Array[] = [];
-      let totalBytes = 0;
-
-      try {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) {
-            break;
-          }
-          if (value) {
-            totalBytes += value.length;
-            if (totalBytes > MAX_MEDIA_SIZE_BYTES) {
-              await reader.cancel();
-              const err = new Error(
-                `Dung lượng hình ảnh vượt quá giới hạn 5MB (${totalBytes} bytes)`,
-              );
-              (err as unknown as { code: string }).code = 'MEDIA_DOWNLOAD_FAILED';
-              throw err;
-            }
-            chunks.push(value);
-          }
-        }
-      } catch (streamError: unknown) {
-        const err = streamError as Error & { code?: string };
-        if (err?.code === 'MEDIA_DOWNLOAD_FAILED') {
-          throw err;
-        }
-        throw streamError;
-      }
-
-      const buffer = Buffer.concat(chunks);
 
       if (buffer.length === 0) {
         const err = new Error('Tệp hình ảnh rỗng (0 bytes)');
