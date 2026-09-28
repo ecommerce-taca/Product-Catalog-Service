@@ -12,6 +12,7 @@ export enum CategoryStatus {
 
 export const CATEGORY_SLUG_REGEX = /^[a-z0-9]+(-[a-z0-9]+)*$/;
 export const CATEGORY_PATH_REGEX = /^(\/[0-9a-f-]{36})+$/;
+export const CATEGORY_CODE_REGEX = /^[A-Z0-9_-]{3,32}$/;
 
 @Schema({
   collection: 'categories',
@@ -27,6 +28,15 @@ export class Category {
     match: UUIDV7_REGEX,
   })
   _id: string;
+
+  @Prop({
+    type: String,
+    trim: true,
+    uppercase: true,
+    default: null,
+    match: /^[A-Z0-9_-]{3,32}$/,
+  })
+  category_code: string | null;
 
   @Prop({
     type: String,
@@ -112,6 +122,10 @@ CategorySchema.virtual('category_id').get(function () {
 });
 
 CategorySchema.index({ slug: 1 }, { unique: true, name: 'idx_categories_slug_unique' });
+CategorySchema.index(
+  { category_code: 1 },
+  { unique: true, sparse: true, name: 'idx_category_code_unique_sparse' },
+);
 CategorySchema.index(
   { parent_id: 1, name: 1 },
   { unique: true, name: 'idx_categories_parent_name' },

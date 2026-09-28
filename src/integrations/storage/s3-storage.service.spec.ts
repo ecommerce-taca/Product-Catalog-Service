@@ -1,6 +1,6 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { ConfigService } from '@nestjs/config';
-import { HeadObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { DeleteObjectsCommand, HeadObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { S3StorageService } from './s3-storage.service';
 
 describe('S3StorageService', () => {
@@ -204,6 +204,69 @@ describe('S3StorageService', () => {
           }),
         }),
       );
+    });
+  });
+
+  describe('deleteObjects', () => {
+    it('should return immediately without calling send when keys array is empty', async () => {
+      await service.deleteObjects([]);
+      expect(mockSend).not.toHaveBeenCalled();
+    });
+
+    it('should send DeleteObjectsCommand with Quiet: true and clean keys', async () => {
+      mockSend.mockResolvedValueOnce({ Deleted: [{ Key: 'products/img1.webp' }] });
+
+      const keys = ['/products/img1.webp', 'products/img2.webp'];
+      await service.deleteObjects(keys);
+
+      expect(mockSend).toHaveBeenCalledTimes(1);
+      expect(mockSend).toHaveBeenCalledWith(expect.any(DeleteObjectsCommand));
+
+      const calledCommand = mockSend.mock.calls[0][0];
+      expect(calledCommand.input).toEqual({
+        Bucket: 'test-bucket',
+        Delete: {
+          Objects: [{ Key: 'products/img1.webp' }, { Key: 'products/img2.webp' }],
+          Quiet: true,
+        },
+      });
+    });
+
+    it('should chunk keys into batches of 1000 if keys exceed 1000', async () => {
+      mockSend.mockResolvedValue({ Deleted: [] });
+
+      const totalKeys = 1050;
+      const keys = Array.from({ length: totalKeys }, (_, i) => `key-${i}.png`);
+
+      await service.deleteObjects(keys);
+
+      expect(mockSend).toHaveBeenCalledTimes(2);
+
+      const firstBatch = mockSend.mock.calls[0][0];
+      expect(firstBatch.input.Delete.Objects.length).toBe(1000);
+      expect(firstBatch.input.Delete.Objects[0].Key).toBe('key-0.png');
+      expect(firstBatch.input.Delete.Objects[999].Key).toBe('key-999.png');
+
+      const secondBatch = mockSend.mock.calls[1][0];
+      expect(secondBatch.input.Delete.Objects.length).toBe(50);
+      expect(secondBatch.input.Delete.Objects[0].Key).toBe('key-1000.png');
+      expect(secondBatch.input.Delete.Objects[49].Key).toBe('key-1049.png');
+    });
+
+    it('should catch error, log warning, and not throw when S3 send fails', async () => {
+      mockSend.mockRejectedValueOnce(new Error('S3 Access Denied'));
+
+      await expect(service.deleteObjects(['test-file.jpg'])).resolves.not.toThrow();
+      expect(mockSend).toHaveBeenCalledTimes(1);
+    });
+
+    it('should handle response containing errors without throwing', async () => {
+      mockSend.mockResolvedValueOnce({
+        Errors: [{ Key: 'test-file.jpg', Code: 'AccessDenied', Message: 'Access Denied' }],
+      });
+
+      await expect(service.deleteObjects(['test-file.jpg'])).resolves.not.toThrow();
+      expect(mockSend).toHaveBeenCalledTimes(1);
     });
   });
 });

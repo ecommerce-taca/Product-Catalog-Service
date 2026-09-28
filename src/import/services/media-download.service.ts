@@ -18,7 +18,7 @@ const ALLOWED_MIME_TYPES: Record<string, string> = {
   'image/webp': 'webp',
 };
 
-const MAX_IMAGE_SIZE_BYTES = 5 * 1024 * 1024; // 5MB
+export const MAX_MEDIA_SIZE_BYTES = 5 * 1024 * 1024; // 5MB
 
 @Injectable()
 export class MediaDownloadService {
@@ -83,9 +83,61 @@ export class MediaDownloadService {
         throw err;
       }
 
-      // 4. Download and size verification
-      const arrayBuffer = await response.arrayBuffer();
-      const buffer = Buffer.from(arrayBuffer);
+      // 4. Content-Length header pre-check (B-SEC-01)
+      const contentLengthHeader = response.headers.get('content-length');
+      if (contentLengthHeader) {
+        const contentLength = parseInt(contentLengthHeader, 10);
+        if (!Number.isNaN(contentLength) && contentLength > MAX_MEDIA_SIZE_BYTES) {
+          if (response.body) {
+            await response.body.cancel();
+          }
+          const err = new Error(
+            `Dung lượng hình ảnh vượt quá giới hạn 5MB (${contentLength} bytes)`,
+          );
+          (err as unknown as { code: string }).code = 'MEDIA_DOWNLOAD_FAILED';
+          throw err;
+        }
+      }
+
+      // 5. Download stream chunk-by-chunk with cumulative size verification
+      if (!response.body) {
+        const err = new Error('Tệp hình ảnh rỗng (0 bytes)');
+        (err as unknown as { code: string }).code = 'MEDIA_DOWNLOAD_FAILED';
+        throw err;
+      }
+
+      const reader = response.body.getReader();
+      const chunks: Uint8Array[] = [];
+      let totalBytes = 0;
+
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) {
+            break;
+          }
+          if (value) {
+            totalBytes += value.length;
+            if (totalBytes > MAX_MEDIA_SIZE_BYTES) {
+              await reader.cancel();
+              const err = new Error(
+                `Dung lượng hình ảnh vượt quá giới hạn 5MB (${totalBytes} bytes)`,
+              );
+              (err as unknown as { code: string }).code = 'MEDIA_DOWNLOAD_FAILED';
+              throw err;
+            }
+            chunks.push(value);
+          }
+        }
+      } catch (streamError: unknown) {
+        const err = streamError as Error & { code?: string };
+        if (err?.code === 'MEDIA_DOWNLOAD_FAILED') {
+          throw err;
+        }
+        throw streamError;
+      }
+
+      const buffer = Buffer.concat(chunks);
 
       if (buffer.length === 0) {
         const err = new Error('Tệp hình ảnh rỗng (0 bytes)');
@@ -93,13 +145,7 @@ export class MediaDownloadService {
         throw err;
       }
 
-      if (buffer.length > MAX_IMAGE_SIZE_BYTES) {
-        const err = new Error(`Dung lượng hình ảnh vượt quá giới hạn 5MB (${buffer.length} bytes)`);
-        (err as unknown as { code: string }).code = 'MEDIA_DOWNLOAD_FAILED';
-        throw err;
-      }
-
-      // 5. Hash calculation
+      // 6. Hash calculation
       const sha256 = crypto.createHash('sha256').update(buffer).digest('hex');
       const mediaId = uuidv7();
       const objectKey = `products/${productId}/images/${mediaId}.${extension}`;

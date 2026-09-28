@@ -1,6 +1,7 @@
 import { Prop, Schema, SchemaFactory } from '@nestjs/mongoose';
 import { Document } from 'mongoose';
 import { UUIDV7_REGEX } from '../base.schema';
+import { CATEGORY_CODE_REGEX } from './category.schema';
 
 export enum ImportJobStatus {
   PENDING = 'PENDING',
@@ -66,8 +67,8 @@ export class ImportJob {
     default: null,
     validate: {
       validator: (v: string | null | undefined) =>
-        v === null || v === undefined || UUIDV7_REGEX.test(v),
-      message: 'category_id phải là định dạng UUIDv7 hợp lệ',
+        v === null || v === undefined || UUIDV7_REGEX.test(v) || CATEGORY_CODE_REGEX.test(v),
+      message: 'category_id phải là định dạng UUIDv7 hoặc category_code hợp lệ',
     },
   })
   category_id?: string | null;
@@ -155,6 +156,15 @@ ImportJobSchema.virtual('job_id').get(function (this: ImportJobDocument) {
 ImportJobSchema.index({ shop_id: 1, created_at: -1 }, { name: 'idx_import_jobs_shop_created' });
 
 ImportJobSchema.index({ shop_id: 1, status: 1 }, { name: 'idx_import_jobs_shop_status' });
+
+ImportJobSchema.index(
+  { shop_id: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { status: { $in: ['PENDING', 'PROCESSING'] } },
+    name: 'idx_import_jobs_active_shop_unique',
+  },
+);
 
 ImportJobSchema.index(
   { created_at: 1 },

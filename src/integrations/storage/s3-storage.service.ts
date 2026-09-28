@@ -1,6 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { HeadObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import {
+  DeleteObjectsCommand,
+  HeadObjectCommand,
+  PutObjectCommand,
+  S3Client,
+} from '@aws-sdk/client-s3';
 import * as crypto from 'crypto';
 import { StorageConfig } from '../../config/storage.config';
 
@@ -226,6 +231,47 @@ export class S3StorageService {
       ...(contentDisposition ? { ContentDisposition: contentDisposition } : {}),
     });
     await this.s3Client.send(command);
+  }
+
+  /**
+   * Deletes multiple objects from the S3 bucket in batches of up to 1000 keys.
+   * Catches errors and logs warnings to avoid interrupting transaction rollbacks.
+   */
+  async deleteObjects(keys: string[]): Promise<void> {
+    if (!keys || keys.length === 0) {
+      return;
+    }
+
+    const cleanKeys = keys
+      .filter((k) => typeof k === 'string' && k.trim().length > 0)
+      .map((k) => k.replace(/^\//, ''));
+
+    if (cleanKeys.length === 0) {
+      return;
+    }
+
+    const BATCH_SIZE = 1000;
+    for (let i = 0; i < cleanKeys.length; i += BATCH_SIZE) {
+      const batch = cleanKeys.slice(i, i + BATCH_SIZE);
+      try {
+        const command = new DeleteObjectsCommand({
+          Bucket: this.bucket,
+          Delete: {
+            Objects: batch.map((Key) => ({ Key })),
+            Quiet: true,
+          },
+        });
+        const response = await this.s3Client.send(command);
+        if (response?.Errors && response.Errors.length > 0) {
+          this.logger.warn(
+            `Failed to delete ${response.Errors.length} objects in S3: ${JSON.stringify(response.Errors)}`,
+          );
+        }
+      } catch (error: unknown) {
+        const errMsg = error instanceof Error ? error.message : String(error);
+        this.logger.warn(`Failed to delete S3 objects batch (${batch.length} keys): ${errMsg}`);
+      }
+    }
   }
 
   /**
