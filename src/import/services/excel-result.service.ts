@@ -79,6 +79,9 @@ export class ExcelResultService {
 
   private async downloadOriginalFile(fileUrl: string): Promise<Buffer | null> {
     try {
+      if (typeof this.storageService.downloadBuffer === 'function') {
+        return await this.storageService.downloadBuffer(fileUrl);
+      }
       const cleanKey = fileUrl.replace(/^\//, '');
       const command = new GetObjectCommand({
         Bucket: this.storageService.bucket,

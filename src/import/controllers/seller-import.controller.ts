@@ -363,7 +363,7 @@ export class SellerImportController {
       });
     }
 
-    const job = this.importJobRepo.findByShopAndId
+    let job = this.importJobRepo.findByShopAndId
       ? await this.importJobRepo.findByShopAndId(actorShopScope, jobId)
       : await this.importJobRepo.findById(jobId);
     if (!job || job.shop_id !== actorShopScope) {
@@ -371,6 +371,27 @@ export class SellerImportController {
         code: 'PRODUCT_NOT_FOUND',
         message: 'Không tìm thấy tác vụ.',
       });
+    }
+
+    // Auto-reclaim stale job on poll if worker heartbeat timeout or stuck PENDING (Review 5 SF-01)
+    const now = new Date();
+    const isStaleProcessing =
+      job.status === ImportJobStatus.PROCESSING && job.locked_until && job.locked_until <= now;
+    const isStalePending =
+      job.status === ImportJobStatus.PENDING &&
+      job.created_at &&
+      now.getTime() - new Date(job.created_at).getTime() > 15 * 60 * 1000;
+
+    if (isStaleProcessing || isStalePending) {
+      if (typeof this.importJobRepo.reclaimStaleJobs === 'function') {
+        await this.importJobRepo.reclaimStaleJobs(now);
+      }
+      const reloaded = this.importJobRepo.findByShopAndId
+        ? await this.importJobRepo.findByShopAndId(actorShopScope, jobId)
+        : await this.importJobRepo.findById(jobId);
+      if (reloaded) {
+        job = reloaded;
+      }
     }
 
     return ImportJobResponseDto.fromDocument(job);
@@ -484,12 +505,6 @@ export class SellerImportController {
         TraceContextStorage.getRequestId() || (req?.headers?.['x-request-id'] as string) || '';
 
       res.status(HttpStatus.OK).json({
-        job_id: resultDto.job_id,
-        result_file_url: resultDto.result_file_url,
-        total_rows: resultDto.total_rows,
-        success_count: resultDto.success_count,
-        error_count: resultDto.error_count,
-        expires_at: resultDto.expires_at,
         data: resultDto,
         meta: {
           request_id: requestId,

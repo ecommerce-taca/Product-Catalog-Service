@@ -46,10 +46,10 @@ export class ExcelTemplateService {
   ): Promise<TemplatePresignedResult> {
     if (dto.category_ids && dto.category_ids.length > 0) {
       for (const catId of dto.category_ids) {
-        let category = await this.categoryRepository.findById(catId);
-        if (!category && this.categoryRepository.findByIdOrCode) {
-          category = await this.categoryRepository.findByIdOrCode(catId);
-        }
+        const category =
+          typeof this.categoryRepository.findByIdOrCode === 'function'
+            ? await this.categoryRepository.findByIdOrCode(catId)
+            : await this.categoryRepository.findById(catId);
         if (!category || category.status !== CategoryStatus.ACTIVE) {
           throw new BadRequestException({
             code: 'PRODUCT_CATEGORY_INVALID',
@@ -125,10 +125,10 @@ export class ExcelTemplateService {
     const categories: CategoryDocument[] = [];
     if (dto.category_ids && dto.category_ids.length > 0) {
       for (const catId of dto.category_ids) {
-        let cat = await this.categoryRepository.findById(catId);
-        if (!cat && this.categoryRepository.findByIdOrCode) {
-          cat = await this.categoryRepository.findByIdOrCode(catId);
-        }
+        const cat =
+          typeof this.categoryRepository.findByIdOrCode === 'function'
+            ? await this.categoryRepository.findByIdOrCode(catId)
+            : await this.categoryRepository.findById(catId);
         if (!cat || cat.status !== CategoryStatus.ACTIVE) {
           throw new BadRequestException({
             code: 'PRODUCT_CATEGORY_INVALID',
@@ -143,17 +143,17 @@ export class ExcelTemplateService {
     const prefillProducts: ProductDocument[] = [];
     if (dto.product_ids && dto.product_ids.length > 0 && this.productRepository && shopId) {
       for (const prodId of dto.product_ids) {
-        let prod = await this.productRepository.findByShopAndId(shopId, prodId);
-        if (!prod && this.productRepository.findByIdOrCode) {
-          prod = await this.productRepository.findByIdOrCode(shopId, prodId);
-        }
+        const prod =
+          typeof this.productRepository.findByIdOrCode === 'function'
+            ? await this.productRepository.findByIdOrCode(shopId, prodId)
+            : await this.productRepository.findByShopAndId(shopId, prodId);
         if (prod) {
           prefillProducts.push(prod);
           if (categories.length === 0 && prod.primary_category_id) {
-            let cat = await this.categoryRepository.findById(prod.primary_category_id);
-            if (!cat && this.categoryRepository.findByIdOrCode) {
-              cat = await this.categoryRepository.findByIdOrCode(prod.primary_category_id);
-            }
+            const cat =
+              typeof this.categoryRepository.findByIdOrCode === 'function'
+                ? await this.categoryRepository.findByIdOrCode(prod.primary_category_id)
+                : await this.categoryRepository.findById(prod.primary_category_id);
             if (
               cat &&
               cat.status === CategoryStatus.ACTIVE &&

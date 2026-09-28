@@ -170,3 +170,5 @@ ImportJobSchema.index(
   { created_at: 1 },
   { expireAfterSeconds: 604800, name: 'idx_import_jobs_ttl_7d' },
 );
+
+ImportJobSchema.index({ status: 1, created_at: 1 }, { name: 'idx_import_jobs_status_created' });

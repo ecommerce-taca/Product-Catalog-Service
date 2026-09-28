@@ -280,11 +280,16 @@ describe('SellerImportController - Tracking & Result Export (FR-IM-06)', () => {
       expect(res.status).toHaveBeenCalledWith(HttpStatus.OK);
       expect(res.json).toHaveBeenCalledWith(
         expect.objectContaining({
-          job_id: '01923456-789a-7bc8-9def-0123456789ab',
-          result_file_url: 'https://s3.example.com/imports/presigned-result.xlsx',
-          total_rows: 10,
-          success_count: 8,
-          error_count: 2,
+          data: expect.objectContaining({
+            job_id: '01923456-789a-7bc8-9def-0123456789ab',
+            result_file_url: 'https://s3.example.com/imports/presigned-result.xlsx',
+            total_rows: 10,
+            success_count: 8,
+            error_count: 2,
+          }),
+          meta: expect.objectContaining({
+            as_of: expect.any(String),
+          }),
         }),
       );
     });

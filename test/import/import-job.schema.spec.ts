@@ -53,5 +53,11 @@ describe('ImportJobSchema', () => {
     expect(ttlIndex).toBeDefined();
     expect(ttlIndex![0]).toEqual({ created_at: 1 });
     expect(ttlIndex![1]?.expireAfterSeconds).toBe(604800);
+
+    const statusCreatedIndex = indexes.find(
+      (idx) => idx[1]?.name === 'idx_import_jobs_status_created',
+    );
+    expect(statusCreatedIndex).toBeDefined();
+    expect(statusCreatedIndex![0]).toEqual({ status: 1, created_at: 1 });
   });
 });
