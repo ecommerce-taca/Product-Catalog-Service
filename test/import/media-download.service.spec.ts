@@ -294,28 +294,41 @@ describe('MediaDownloadService (SF-1 Anti-SSRF Redirect Protection)', () => {
       expect(isPrivateOrBlockedIp('::')).toBe(true);
       expect(isPrivateOrBlockedIp('[::]')).toBe(true);
 
-      // Link-local (fe80::/10)
+      // Link-local (fe80::/10 RFC 4291)
       expect(isPrivateOrBlockedIp('fe80::1')).toBe(true);
       expect(isPrivateOrBlockedIp('[fe80::1]')).toBe(true);
       expect(isPrivateOrBlockedIp('[fe80::dead:beef]')).toBe(true);
+      expect(isPrivateOrBlockedIp('fe90::1')).toBe(true);
+      expect(isPrivateOrBlockedIp('[fe90::1]')).toBe(true);
+      expect(isPrivateOrBlockedIp('[feaf::1]')).toBe(true);
 
-      // Unique Local Addresses (fc00::/7, including fd00::/8)
+      // Unique Local Addresses (fc00::/7 RFC 4193, including fd00::/8)
       expect(isPrivateOrBlockedIp('fc00::1')).toBe(true);
       expect(isPrivateOrBlockedIp('[fc00::1]')).toBe(true);
+      expect(isPrivateOrBlockedIp('fc01::1')).toBe(true);
+      expect(isPrivateOrBlockedIp('[fc01::1]')).toBe(true);
       expect(isPrivateOrBlockedIp('fd00::1')).toBe(true);
       expect(isPrivateOrBlockedIp('[fd00::1]')).toBe(true);
+      expect(isPrivateOrBlockedIp('fd12:3456:789a::1')).toBe(true);
+      expect(isPrivateOrBlockedIp('[fd12:3456:789a::1]')).toBe(true);
 
       // Public IPv6 should be allowed
       expect(isPrivateOrBlockedIp('2001:db8::1')).toBe(false);
       expect(isPrivateOrBlockedIp('[2001:db8::1]')).toBe(false);
+      expect(isPrivateOrBlockedIp('2606:4700:4700::1111')).toBe(false);
+      expect(isPrivateOrBlockedIp('[2606:4700:4700::1111]')).toBe(false);
     });
 
     it('should block image URLs with bracketed IPv6 internal hostnames', () => {
       expect(isPrivateOrBlockedUrl('http://[fe80::1]/exploit.png')).toBe(true);
+      expect(isPrivateOrBlockedUrl('http://[fe90::1]/exploit.png')).toBe(true);
       expect(isPrivateOrBlockedUrl('http://[fc00::1]/internal.jpg')).toBe(true);
+      expect(isPrivateOrBlockedUrl('http://[fc01::1]/internal.jpg')).toBe(true);
       expect(isPrivateOrBlockedUrl('http://[fd00::1]/secret.jpg')).toBe(true);
+      expect(isPrivateOrBlockedUrl('http://[fd12:3456:789a::1]/secret.jpg')).toBe(true);
       expect(isPrivateOrBlockedUrl('http://[::1]/admin.png')).toBe(true);
       expect(isPrivateOrBlockedUrl('https://[2001:db8::1]/public.png')).toBe(false);
+      expect(isPrivateOrBlockedUrl('https://[2606:4700:4700::1111]/public.png')).toBe(false);
     });
   });
 });

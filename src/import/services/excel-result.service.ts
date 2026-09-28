@@ -223,9 +223,8 @@ export class ExcelResultService {
         row.commit();
       }
 
-      // Sanitize 100% of cells against Formula Injection (CWE-1236 / L-07 / SEC-FORMULA-01)
-      worksheet.eachRow((row, rowNumber) => {
-        if (rowNumber === 1) return;
+      // Sanitize 100% of cells against Formula Injection (CWE-1236 / L-07 / SEC-FORMULA-01 / SF-01-SEC)
+      worksheet.eachRow((row) => {
         row.eachCell((cell) => {
           if (cell.value !== null && cell.value !== undefined) {
             // Neutralize formula objects

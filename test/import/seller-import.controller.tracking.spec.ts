@@ -3,6 +3,7 @@ import {
   ForbiddenException,
   HttpStatus,
   NotFoundException,
+  ServiceUnavailableException,
 } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { Request, Response } from 'express';
@@ -321,6 +322,39 @@ describe('SellerImportController - Tracking & Result Export (FR-IM-06)', () => {
       });
       expect(res.status).toHaveBeenCalledWith(HttpStatus.OK);
       expect(res.send).toHaveBeenCalledWith(dummyBuffer);
+    });
+
+    it('should throw 503 ServiceUnavailableException when excelResultService is unavailable for binary download (SF-03-HTTP)', async () => {
+      const moduleWithoutExcelResult: TestingModule = await Test.createTestingModule({
+        controllers: [SellerImportController],
+        providers: [
+          { provide: ExcelTemplateService, useValue: mockExcelTemplateService },
+          { provide: SHOP_SNAPSHOT_REPOSITORY_PORT, useValue: mockShopSnapshotRepository },
+          { provide: 'ImportJobRepositoryPort', useValue: mockImportJobRepository },
+          { provide: ImportWorkerService, useValue: mockImportWorkerService },
+          { provide: S3StorageService, useValue: mockS3StorageService },
+        ],
+      }).compile();
+
+      const controllerWithoutExcelResult =
+        moduleWithoutExcelResult.get<SellerImportController>(SellerImportController);
+
+      mockImportJobRepository.findById.mockResolvedValueOnce(completedJobWithErrors);
+
+      const req = {
+        headers: { accept: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' },
+      } as unknown as Request;
+      const res = mockResponse();
+
+      await expect(
+        controllerWithoutExcelResult.getJobResult(
+          '01923456-789a-7bc8-9def-0123456789ab',
+          activeActor.shopScope!,
+          activeActor,
+          req,
+          res,
+        ),
+      ).rejects.toThrow(ServiceUnavailableException);
     });
   });
 });

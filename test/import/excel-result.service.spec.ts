@@ -196,6 +196,38 @@ describe('ExcelResultService', () => {
       expect(skuVal?.startsWith("'+")).toBe(true);
     });
 
+    it('should sanitize cell values in row 1 (header row) against Formula Injection (SF-01-SEC)', async () => {
+      const wb = new ExcelJS.Workbook();
+      const ws = wb.addWorksheet('Sheet1');
+      // Malicious header in A1
+      ws.addRow(["=cmd|'/C calc'!A0", 'Tên sản phẩm', 'Mã danh mục', 'seller_sku', 'price']);
+      ws.addRow(['REF-01', 'Áo khoác', '01912f20-0000-7000-8000-000000000001', 'SKU-01', 100000]);
+
+      const originalBuffer = Buffer.from(await wb.xlsx.writeBuffer());
+      mockS3StorageService.downloadBuffer.mockResolvedValueOnce(originalBuffer);
+
+      const mockJob: Partial<ImportJobDocument> = {
+        _id: '01923456-789a-7bc8-9def-0123456789ab',
+        shop_id: '01912f20-0001-7000-8000-000000000001',
+        file_url: 'imports/shop-01/01923456.xlsx',
+        status: ImportJobStatus.COMPLETED,
+        total_rows: 1,
+        processed_rows: 1,
+        success_count: 1,
+        error_count: 0,
+        error_summary: [],
+      };
+
+      const resultBuffer = await service.generateResultBuffer(mockJob as ImportJobDocument);
+      const resultWorkbook = new ExcelJS.Workbook();
+      await resultWorkbook.xlsx.load(resultBuffer as any);
+
+      const sheet = resultWorkbook.getWorksheet(1);
+      const row1 = sheet!.getRow(1);
+      const cellA1 = row1.getCell(1).value?.toString();
+      expect(cellA1?.startsWith("'=")).toBe(true);
+    });
+
     it('should sanitize cell values containing richText against Formula Injection (SF-03)', async () => {
       const wb = new ExcelJS.Workbook();
       const ws = wb.addWorksheet('Sheet1');
