@@ -1,8 +1,12 @@
 import { BadRequestException } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import * as ExcelJS from 'exceljs';
+import { Model } from 'mongoose';
 import { ExcelTemplateService } from '../../src/import/services/excel-template.service';
-import { CategoryStatus } from '../../src/database/schemas/category.schema';
+import { CategoryDocument, CategoryStatus } from '../../src/database/schemas/category.schema';
+import { ProductDocument } from '../../src/database/schemas/product.schema';
+import { CategoryRepository } from '../../src/category/repositories/category.repository';
+import { ProductRepository } from '../../src/product/repositories/product.repository';
 import {
   AttributeDefinitionStatus,
   AttributeScopeType,
@@ -12,12 +16,23 @@ import {
 import { S3StorageService } from '../../src/integrations/storage/s3-storage.service';
 import { TemplateLayoutMode } from '../../src/import/dto/generate-custom-template.dto';
 
+type SheetWithProtection = ExcelJS.Worksheet & {
+  sheetProtection?: { sheet?: boolean };
+};
+
 describe('ExcelTemplateService', () => {
   let service: ExcelTemplateService;
 
   const mockCategoryRepository = {
     findById: jest.fn(),
     findAllPaginated: jest.fn(),
+    findByIdOrCode: jest.fn(),
+    findByCodes: jest.fn(),
+  };
+
+  const mockProductRepository = {
+    findByShopAndId: jest.fn(),
+    findByIdOrCode: jest.fn(),
   };
 
   const mockAttributeDefinitionRepository = {
@@ -87,6 +102,7 @@ describe('ExcelTemplateService', () => {
           useValue: mockAttributeDefinitionRepository,
         },
         { provide: S3StorageService, useValue: mockS3StorageService },
+        { provide: 'ProductRepositoryPort', useValue: mockProductRepository },
       ],
     }).compile();
 
@@ -158,7 +174,7 @@ describe('ExcelTemplateService', () => {
 
       // Verify Sheet 1 without categoryId: no prefilled category, no worksheet protection
       expect(sheet1?.getCell(2, 3).value).toBeFalsy();
-      expect((sheet1 as any)?.sheetProtection).toBeFalsy();
+      expect((sheet1 as SheetWithProtection)?.sheetProtection).toBeFalsy();
     });
 
     const cat1 = {
@@ -218,7 +234,7 @@ describe('ExcelTemplateService', () => {
       expect(sheetCat1?.getCell(11, 3).value).toBe(expectedCat1Value); // row_count: 10 => rows 2..11
       expect(sheetCat1?.getCell(2, 3).protection?.locked).not.toBe(false);
       expect(sheetCat1?.getCell(2, 1).protection?.locked).toBe(false);
-      expect((sheetCat1 as any)?.sheetProtection?.sheet).toBe(true);
+      expect((sheetCat1 as SheetWithProtection)?.sheetProtection?.sheet).toBe(true);
 
       const expectedCat2Value = `${cat2.name} [${cat2._id}]`;
       expect(sheetCat2?.getCell(2, 3).value).toBe(expectedCat2Value);
@@ -261,7 +277,7 @@ describe('ExcelTemplateService', () => {
       expect(sheetCat1?.getCell(2, 3).value).toBe(expectedCat1Value);
       expect(sheetCat1?.getCell(101, 3).value).toBe(expectedCat1Value);
       expect(sheetCat1?.getCell(2, 3).protection?.locked).not.toBe(false);
-      expect((sheetCat1 as any)?.sheetProtection?.sheet).toBe(true);
+      expect((sheetCat1 as SheetWithProtection)?.sheetProtection?.sheet).toBe(true);
     });
 
     it('should generate SINGLE_SHEET layout with prefilled category when single category requested', async () => {
@@ -291,7 +307,7 @@ describe('ExcelTemplateService', () => {
       expect(sheet?.getCell(2, 3).value).toBe(expectedCatValue);
       expect(sheet?.getCell(2, 3).protection?.locked).not.toBe(false);
       expect(sheet?.getCell(2, 1).protection?.locked).toBe(false);
-      expect((sheet as any)?.sheetProtection?.sheet).toBe(true);
+      expect((sheet as SheetWithProtection)?.sheetProtection?.sheet).toBe(true);
       // Dynamic attributes should also be present (columns 11, 12, 13)
       expect(sheet?.columnCount).toBe(13);
     });
@@ -337,6 +353,177 @@ describe('ExcelTemplateService', () => {
           category_ids: ['non-existent-uuid'],
         }),
       ).rejects.toThrow(BadRequestException);
+    });
+
+    const catWithCode = {
+      _id: '01912f20-0000-7000-8000-000000000003',
+      name: 'Áo Thun Nam',
+      category_code: 'CAT-1001',
+      status: CategoryStatus.ACTIVE,
+      path: '/01912f20-0000-7000-8000-000000000003',
+    };
+
+    const catWithoutCode = {
+      _id: '01912f20-0000-7000-8000-000000000004',
+      name: 'Phụ Kiện',
+      category_code: null,
+      status: CategoryStatus.ACTIVE,
+      path: '/01912f20-0000-7000-8000-000000000004',
+    };
+
+    const productWithCode = {
+      _id: '01912f30-0000-7000-8000-000000000001',
+      product_code: 'PRD-8K2N9X',
+      shop_id: 'shop-123',
+      title: 'Áo Polo Coolmate',
+      slug: 'ao-polo-coolmate',
+      primary_category_id: catWithCode._id,
+      description: 'Chất vải cao cấp',
+      brand: 'Coolmate',
+    };
+
+    const productWithoutCode = {
+      _id: '01912f30-0000-7000-8000-000000000002',
+      product_code: null,
+      shop_id: 'shop-123',
+      title: 'Áo Thun Basic',
+      slug: 'ao-thun-basic',
+      primary_category_id: catWithoutCode._id,
+      description: 'Vải cotton',
+      brand: 'Taca',
+    };
+
+    it('should display short code [CAT-1001] in column 3 and guidance sheet when category has category_code', async () => {
+      mockCategoryRepository.findById.mockResolvedValue(catWithCode);
+      mockCategoryRepository.findAllPaginated.mockResolvedValue({
+        items: [catWithCode],
+        total: 1,
+      });
+      mockAttributeDefinitionRepository.findByScope.mockResolvedValue([]);
+
+      const buffer = await service.generateTemplate({
+        category_ids: [catWithCode._id],
+        layout_mode: TemplateLayoutMode.SINGLE_SHEET,
+        row_count: 5,
+      });
+
+      const workbook = new ExcelJS.Workbook();
+      interface ExcelReader {
+        load(data: unknown): Promise<ExcelJS.Workbook>;
+      }
+      await (workbook.xlsx as unknown as ExcelReader).load(buffer);
+
+      const sheet = workbook.getWorksheet('Sản phẩm & Biến thể');
+      expect(sheet?.getCell(2, 3).value).toBe('Áo Thun Nam [CAT-1001]');
+
+      const sheetGuide = workbook.getWorksheet('Hướng dẫn & Danh mục');
+      expect(sheetGuide?.getRow(1).getCell(3).value).toBe('Mã Danh Mục Ngắn (category_code)');
+
+      let foundCatRow: ExcelJS.Row | undefined;
+      sheetGuide?.eachRow((row) => {
+        if (row.getCell(1).value === 'Áo Thun Nam [CAT-1001]') {
+          foundCatRow = row;
+        }
+      });
+      expect(foundCatRow).toBeDefined();
+      expect(foundCatRow?.getCell(1).value).toBe('Áo Thun Nam [CAT-1001]');
+      expect(foundCatRow?.getCell(2).value).toBe(catWithCode._id);
+      expect(foundCatRow?.getCell(3).value).toBe('CAT-1001');
+    });
+
+    it('should fallback to [UUID] when category does not have category_code', async () => {
+      mockCategoryRepository.findById.mockResolvedValue(catWithoutCode);
+      mockCategoryRepository.findAllPaginated.mockResolvedValue({
+        items: [catWithoutCode],
+        total: 1,
+      });
+      mockAttributeDefinitionRepository.findByScope.mockResolvedValue([]);
+
+      const buffer = await service.generateTemplate({
+        category_ids: [catWithoutCode._id],
+        layout_mode: TemplateLayoutMode.SINGLE_SHEET,
+        row_count: 5,
+      });
+
+      const workbook = new ExcelJS.Workbook();
+      interface ExcelReader {
+        load(data: unknown): Promise<ExcelJS.Workbook>;
+      }
+      await (workbook.xlsx as unknown as ExcelReader).load(buffer);
+
+      const sheet = workbook.getWorksheet('Sản phẩm & Biến thể');
+      expect(sheet?.getCell(2, 3).value).toBe(`Phụ Kiện [${catWithoutCode._id}]`);
+
+      const sheetGuide = workbook.getWorksheet('Hướng dẫn & Danh mục');
+      let foundCatRow: ExcelJS.Row | undefined;
+      sheetGuide?.eachRow((row) => {
+        if (row.getCell(1).value === `Phụ Kiện [${catWithoutCode._id}]`) {
+          foundCatRow = row;
+        }
+      });
+      expect(foundCatRow).toBeDefined();
+      expect(foundCatRow?.getCell(3).value).toBe('---');
+    });
+
+    it('should display [PRD-8K2N9X] in title when existing SPU has product_code, and fallback to [UUID] when missing', async () => {
+      mockCategoryRepository.findById.mockImplementation(async (id: string) => {
+        if (id === catWithCode._id) return catWithCode;
+        if (id === catWithoutCode._id) return catWithoutCode;
+        return null;
+      });
+      mockCategoryRepository.findAllPaginated.mockResolvedValue({
+        items: [catWithCode, catWithoutCode],
+        total: 2,
+      });
+      mockProductRepository.findByShopAndId.mockImplementation(
+        async (_shopId: string, id: string) => {
+          if (id === productWithCode._id) return productWithCode;
+          if (id === productWithoutCode._id) return productWithoutCode;
+          return null;
+        },
+      );
+      mockAttributeDefinitionRepository.findByScope.mockResolvedValue([]);
+
+      // Test with productWithCode
+      const buffer1 = await service.generateTemplate(
+        {
+          category_ids: [catWithCode._id],
+          product_ids: [productWithCode._id],
+          layout_mode: TemplateLayoutMode.SINGLE_SHEET,
+          row_count: 5,
+        },
+        'shop-123',
+      );
+
+      const workbook1 = new ExcelJS.Workbook();
+      interface ExcelReader {
+        load(data: unknown): Promise<ExcelJS.Workbook>;
+      }
+      await (workbook1.xlsx as unknown as ExcelReader).load(buffer1);
+      const sheetWithCode = workbook1.getWorksheet('Sản phẩm & Biến thể');
+      expect(sheetWithCode?.getCell(2, 1).value).toBe('PRD-8K2N9X');
+      expect(sheetWithCode?.getCell(2, 2).value).toBe('Áo Polo Coolmate [PRD-8K2N9X]');
+      expect(sheetWithCode?.getCell(2, 3).value).toBe('Áo Thun Nam [CAT-1001]');
+
+      // Test with productWithoutCode
+      const buffer2 = await service.generateTemplate(
+        {
+          category_ids: [catWithoutCode._id],
+          product_ids: [productWithoutCode._id],
+          layout_mode: TemplateLayoutMode.SINGLE_SHEET,
+          row_count: 5,
+        },
+        'shop-123',
+      );
+
+      const workbook2 = new ExcelJS.Workbook();
+      await (workbook2.xlsx as unknown as ExcelReader).load(buffer2);
+      const sheetWithoutCode = workbook2.getWorksheet('Sản phẩm & Biến thể');
+      expect(sheetWithoutCode?.getCell(2, 1).value).toBe('ao-thun-basic');
+      expect(sheetWithoutCode?.getCell(2, 2).value).toBe(
+        `Áo Thun Basic [${productWithoutCode._id}]`,
+      );
+      expect(sheetWithoutCode?.getCell(2, 3).value).toBe(`Phụ Kiện [${catWithoutCode._id}]`);
     });
   });
 
@@ -405,6 +592,116 @@ describe('ExcelTemplateService', () => {
           category_ids: ['invalid-cat-id'],
         }),
       ).rejects.toThrow(BadRequestException);
+    });
+  });
+
+  describe('CategoryRepository.findByIdOrCode & findByCodes', () => {
+    let categoryRepo: CategoryRepository;
+    let mockCatModel: { findOne: jest.Mock; find: jest.Mock };
+
+    beforeEach(() => {
+      mockCatModel = {
+        findOne: jest.fn().mockReturnValue({
+          session: jest.fn().mockReturnThis(),
+          exec: jest.fn().mockResolvedValue({
+            _id: '01912f20-0000-7000-8000-000000000003',
+            category_code: 'CAT-1001',
+            name: 'Áo Thun Nam',
+          }),
+        }),
+        find: jest.fn().mockReturnValue({
+          session: jest.fn().mockReturnThis(),
+          exec: jest.fn().mockResolvedValue([
+            { _id: 'cat-1', category_code: 'CAT-1001' },
+            { _id: 'cat-2', category_code: 'CAT-1002' },
+          ]),
+        }),
+      };
+      categoryRepo = new CategoryRepository(mockCatModel as unknown as Model<CategoryDocument>);
+    });
+
+    it('should query MongoDB with $or: [_id, category_code] when calling findByIdOrCode', async () => {
+      const result = await categoryRepo.findByIdOrCode('cat-1001');
+      expect(mockCatModel.findOne).toHaveBeenCalledWith({
+        $or: [{ _id: 'cat-1001' }, { category_code: 'CAT-1001' }],
+      });
+      expect(result).toEqual(expect.objectContaining({ category_code: 'CAT-1001' }));
+
+      await categoryRepo.findByIdOrCode('01912f20-0000-7000-8000-000000000003');
+      expect(mockCatModel.findOne).toHaveBeenCalledWith({
+        $or: [
+          { _id: '01912f20-0000-7000-8000-000000000003' },
+          { category_code: '01912F20-0000-7000-8000-000000000003' },
+        ],
+      });
+    });
+
+    it('should return null when findByIdOrCode is called with empty or whitespace string', async () => {
+      const res1 = await categoryRepo.findByIdOrCode('');
+      const res2 = await categoryRepo.findByIdOrCode('   ');
+      expect(res1).toBeNull();
+      expect(res2).toBeNull();
+      expect(mockCatModel.findOne).not.toHaveBeenCalled();
+    });
+
+    it('should query MongoDB with category_code: { $in: [...] } when calling findByCodes', async () => {
+      const results = await categoryRepo.findByCodes(['cat-1001', 'cat-1002']);
+      expect(mockCatModel.find).toHaveBeenCalledWith({
+        category_code: { $in: ['CAT-1001', 'CAT-1002'] },
+      });
+      expect(results).toHaveLength(2);
+    });
+
+    it('should return empty array when findByCodes is called with empty array', async () => {
+      const res = await categoryRepo.findByCodes([]);
+      expect(res).toEqual([]);
+      expect(mockCatModel.find).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('ProductRepository.findByIdOrCode', () => {
+    let productRepo: ProductRepository;
+    let mockProdModel: { findOne: jest.Mock };
+
+    beforeEach(() => {
+      mockProdModel = {
+        findOne: jest.fn().mockReturnValue({
+          session: jest.fn().mockReturnThis(),
+          exec: jest.fn().mockResolvedValue({
+            _id: '01912f30-0000-7000-8000-000000000001',
+            shop_id: 'shop-123',
+            product_code: 'PRD-8K2N9X',
+            title: 'Áo Polo Coolmate',
+          }),
+        }),
+      };
+      productRepo = new ProductRepository(mockProdModel as unknown as Model<ProductDocument>);
+    });
+
+    it('should query MongoDB with shop_id and $or: [_id, product_code] when calling findByIdOrCode', async () => {
+      const result = await productRepo.findByIdOrCode('shop-123', 'prd-8k2n9x');
+      expect(mockProdModel.findOne).toHaveBeenCalledWith({
+        shop_id: 'shop-123',
+        $or: [{ _id: 'prd-8k2n9x' }, { product_code: 'PRD-8K2N9X' }],
+      });
+      expect(result).toEqual(expect.objectContaining({ product_code: 'PRD-8K2N9X' }));
+
+      await productRepo.findByIdOrCode('shop-123', '01912f30-0000-7000-8000-000000000001');
+      expect(mockProdModel.findOne).toHaveBeenCalledWith({
+        shop_id: 'shop-123',
+        $or: [
+          { _id: '01912f30-0000-7000-8000-000000000001' },
+          { product_code: '01912F30-0000-7000-8000-000000000001' },
+        ],
+      });
+    });
+
+    it('should return null when findByIdOrCode is called with empty or whitespace string', async () => {
+      const res1 = await productRepo.findByIdOrCode('shop-123', '');
+      const res2 = await productRepo.findByIdOrCode('shop-123', '   ');
+      expect(res1).toBeNull();
+      expect(res2).toBeNull();
+      expect(mockProdModel.findOne).not.toHaveBeenCalled();
     });
   });
 });

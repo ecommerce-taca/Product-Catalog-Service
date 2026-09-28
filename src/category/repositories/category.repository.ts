@@ -17,6 +17,40 @@ export class CategoryRepository
     super(categoryModel);
   }
 
+  async findByIdOrCode(
+    idOrCode: string,
+    session?: ClientSession,
+  ): Promise<CategoryDocument | null> {
+    if (!idOrCode || !idOrCode.trim()) {
+      return null;
+    }
+    const trimmed = idOrCode.trim();
+    const query = this.model.findOne({
+      $or: [{ _id: trimmed }, { category_code: trimmed.toUpperCase() }],
+    });
+    if (session) {
+      query.session(session);
+    }
+    return query.exec();
+  }
+
+  async findByCodes(codes: string[], session?: ClientSession): Promise<CategoryDocument[]> {
+    if (!codes || codes.length === 0) {
+      return [];
+    }
+    const upperCodes = codes
+      .map((c) => (c ? c.trim().toUpperCase() : ''))
+      .filter((c) => c.length > 0);
+    if (upperCodes.length === 0) {
+      return [];
+    }
+    const query = this.model.find({ category_code: { $in: upperCodes } });
+    if (session) {
+      query.session(session);
+    }
+    return query.exec();
+  }
+
   async findBySlug(slug: string, session?: ClientSession): Promise<CategoryDocument | null> {
     return this.findOne({ slug }, session);
   }
