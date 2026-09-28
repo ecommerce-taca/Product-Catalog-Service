@@ -196,6 +196,38 @@ describe('ExcelResultService', () => {
       expect(skuVal?.startsWith("'+")).toBe(true);
     });
 
+    it('should sanitize cell values containing richText against Formula Injection (SF-03)', async () => {
+      const wb = new ExcelJS.Workbook();
+      const ws = wb.addWorksheet('Sheet1');
+      ws.addRow(['Col1', 'Col2']);
+      const row = ws.addRow(['normal', '']);
+      row.getCell(2).value = {
+        richText: [{ text: '=cmd|/c calc.exe' }, { text: ' normal text' }],
+      } as any;
+      const originalBuffer = Buffer.from(await wb.xlsx.writeBuffer());
+
+      mockS3StorageService.downloadBuffer.mockResolvedValueOnce(originalBuffer);
+
+      const mockJob: Partial<ImportJobDocument> = {
+        _id: '01923456-789a-7bc8-9def-0123456789ab',
+        shop_id: '01912f20-0001-7000-8000-000000000001',
+        file_url: 'imports/richtext.xlsx',
+        status: ImportJobStatus.COMPLETED,
+        total_rows: 1,
+        processed_rows: 1,
+        success_count: 1,
+        error_count: 0,
+        error_summary: [],
+      };
+
+      const resultBuffer = await service.generateResultBuffer(mockJob as ImportJobDocument);
+      const resultWorkbook = new ExcelJS.Workbook();
+      await resultWorkbook.xlsx.load(resultBuffer as any);
+      const resWs = resultWorkbook.getWorksheet(1);
+      const cellVal = resWs!.getRow(2).getCell(2).value as any;
+      expect(cellVal.richText[0].text.startsWith("'=")).toBe(true);
+    });
+
     it('should fallback to clean error summary workbook when original file fails to load from S3', async () => {
       // S3 rejects with error
       mockS3StorageService.s3Client.send.mockRejectedValueOnce(new Error('S3 Access Denied'));

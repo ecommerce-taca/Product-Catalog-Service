@@ -245,6 +245,9 @@ export class S3StorageService {
       throw new Error('S3 objectKey must be a non-empty string');
     }
     const cleanKey = objectKey.replace(/^\//, '');
+    if (cleanKey.includes('..') || cleanKey.includes('\\')) {
+      throw new Error('S3 objectKey contains invalid path traversal sequences');
+    }
     const command = new GetObjectCommand({
       Bucket: this.bucket,
       Key: cleanKey,
@@ -254,6 +257,10 @@ export class S3StorageService {
       throw new Error(`S3 response body is empty for key: ${objectKey}`);
     }
     if (response.ContentLength && response.ContentLength > maxSizeBytes) {
+      const bodyStream = response.Body as any;
+      if (typeof bodyStream?.destroy === 'function') {
+        bodyStream.destroy();
+      }
       throw new Error(`S3 object ${objectKey} exceeds max size of ${maxSizeBytes} bytes`);
     }
     const chunks: Buffer[] = [];
@@ -263,6 +270,9 @@ export class S3StorageService {
       const buf = typeof chunk === 'string' ? Buffer.from(chunk) : (chunk as Buffer);
       totalBytes += buf.length;
       if (totalBytes > maxSizeBytes) {
+        if (typeof (stream as any)?.destroy === 'function') {
+          (stream as any).destroy();
+        }
         throw new Error(
           `S3 download exceeded max size of ${maxSizeBytes} bytes for key ${objectKey}`,
         );

@@ -45,14 +45,13 @@ export function isPrivateOrBlockedIp(ip: string): boolean {
     return isPrivateOrBlockedIp(`${o1}.${o2}.${o3}.${o4}`);
   }
 
-  // IPv6 addresses
+  // IPv6 addresses (loopback, link-local fe80::/10, unique local fc00::/7 including fd00::/8)
   if (
-    cleanIp === '::1' ||
-    cleanIp === '[::1]' ||
-    cleanIp === '::' ||
-    cleanIp.startsWith('fe80:') ||
-    cleanIp.startsWith('fc00:') ||
-    cleanIp.startsWith('fd00:')
+    strippedIp === '::1' ||
+    strippedIp === '::' ||
+    strippedIp.startsWith('fe80:') ||
+    strippedIp.startsWith('fc00:') ||
+    strippedIp.startsWith('fd00:')
   ) {
     return true;
   }
