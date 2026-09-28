@@ -35,6 +35,7 @@ describe('ImportWorkerService', () => {
   const mockProductRepository = {
     create: jest.fn(),
     findById: jest.fn(),
+    findByIdOrCode: jest.fn(),
     update: jest.fn().mockResolvedValue({}),
   };
 
@@ -46,6 +47,7 @@ describe('ImportWorkerService', () => {
 
   const mockCategoryRepository = {
     findById: jest.fn(),
+    findByIdOrCode: jest.fn(),
   };
 
   const mockProductCategoryRepository = {
@@ -66,6 +68,7 @@ describe('ImportWorkerService', () => {
     s3Client: {
       send: jest.fn(),
     },
+    downloadBuffer: jest.fn(),
     uploadBuffer: jest.fn().mockResolvedValue(undefined),
     deleteObjects: jest.fn().mockResolvedValue(undefined),
   };
@@ -201,14 +204,20 @@ describe('ImportWorkerService', () => {
     mockS3StorageService.s3Client.send.mockResolvedValue({
       Body: stream,
     });
+    mockS3StorageService.downloadBuffer.mockResolvedValue(buffer);
   }
 
   beforeEach(async () => {
     jest.clearAllMocks();
     delete (mockProductRepository as any).findOne;
     delete (mockCategoryRepository as any).findOne;
-    delete (mockProductRepository as any).findByIdOrCode;
-    delete (mockCategoryRepository as any).findByIdOrCode;
+
+    mockProductRepository.findByIdOrCode.mockImplementation(async (_shopId: string, id: string) => {
+      return mockProductRepository.findById(id);
+    });
+    mockCategoryRepository.findByIdOrCode.mockImplementation(async (id: string) => {
+      return mockCategoryRepository.findById(id);
+    });
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -1411,8 +1420,8 @@ describe('ImportWorkerService', () => {
         error_summary: [],
       };
       mockImportJobRepository.findById.mockResolvedValue(mockJobDoc);
-      (mockProductRepository as any).findOne = jest.fn().mockResolvedValue(existingProduct);
-      (mockCategoryRepository as any).findOne = jest.fn().mockResolvedValue({
+      mockProductRepository.findByIdOrCode.mockResolvedValue(existingProduct);
+      mockCategoryRepository.findByIdOrCode.mockResolvedValue({
         _id: testCategoryId,
         category_code: 'CAT-1001',
         status: CategoryStatus.ACTIVE,
@@ -1564,7 +1573,13 @@ describe('ImportWorkerService', () => {
       await service.processJob(testJobId);
 
       expect(mockProductRepository.update).toHaveBeenCalledWith(
-        { _id: existingProductId },
+        {
+          _id: existingProductId,
+          $or: [
+            { 'price_summary.base_price': { $gt: BigInt(80000) } },
+            { 'price_summary.base_price': null },
+          ],
+        },
         expect.objectContaining({
           $set: expect.objectContaining({
             'price_summary.base_price': BigInt(80000),

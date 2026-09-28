@@ -286,17 +286,18 @@ export class SellerImportController {
         error_summary: [],
       });
     } catch (err: any) {
+      try {
+        await this.storageService.deleteObjects([s3Key]);
+      } catch (cleanupErr: unknown) {
+        this.logger.warn(`Failed to cleanup s3 file on error: ${cleanupErr}`);
+      }
+
       if (
         err?.code === 11000 ||
         err?.message?.includes('11000') ||
         err?.message?.includes('idx_import_jobs_active_shop_unique') ||
         err?.message?.includes('idx_import_jobs_shop_active_unique')
       ) {
-        try {
-          await this.storageService.deleteObjects([s3Key]);
-        } catch (cleanupErr: unknown) {
-          this.logger.warn(`Failed to cleanup s3 file on conflict: ${cleanupErr}`);
-        }
         throw new ConflictException({
           code: 'PRODUCT_IMPORT_JOB_RUNNING',
           message: 'Gian hàng đang có tiến trình nhập sản phẩm đang xử lý. Vui lòng chờ hoàn tất.',
@@ -458,7 +459,10 @@ export class SellerImportController {
       });
     }
 
-    if (job.error_count === 0 || !job.error_summary || job.error_summary.length === 0) {
+    if (
+      job.status !== ImportJobStatus.FAILED &&
+      (job.error_count === 0 || !job.error_summary || job.error_summary.length === 0)
+    ) {
       throw new BadRequestException({
         code: 'PRODUCT_IMPORT_NO_ERRORS',
         message: 'Tác vụ đã hoàn tất thành công 100%, không có dòng lỗi nào cần xuất báo cáo.',
