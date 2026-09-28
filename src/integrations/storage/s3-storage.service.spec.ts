@@ -303,5 +303,50 @@ describe('S3StorageService', () => {
         'S3 response body is empty',
       );
     });
+
+    it('should reject objectKey with path traversal sequences (".." or "\\")', async () => {
+      await expect(service.downloadBuffer('../secret.xlsx')).rejects.toThrow(
+        'S3 objectKey contains invalid path traversal sequences',
+      );
+      await expect(service.downloadBuffer('test\\key.xlsx')).rejects.toThrow(
+        'S3 objectKey contains invalid path traversal sequences',
+      );
+    });
+
+    it('should destroy stream and reject when ContentLength exceeds maxSizeBytes', async () => {
+      const { Readable } = await import('stream');
+      const stream = new Readable();
+      const destroySpy = jest.spyOn(stream, 'destroy');
+
+      mockSend.mockResolvedValueOnce({
+        Body: stream,
+        ContentLength: 30 * 1024 * 1024, // 30MB > 20MB limit
+      });
+
+      await expect(service.downloadBuffer('large.xlsx')).rejects.toThrow(
+        'exceeds max size of 20971520 bytes',
+      );
+      expect(destroySpy).toHaveBeenCalled();
+    });
+
+    it('should destroy stream and reject when cumulative stream chunks exceed maxSizeBytes', async () => {
+      const { Readable } = await import('stream');
+      const stream = new Readable({
+        read() {},
+      });
+      const destroySpy = jest.spyOn(stream, 'destroy');
+
+      mockSend.mockResolvedValueOnce({
+        Body: stream,
+        ContentLength: undefined, // Content-Length not set
+      });
+
+      const promise = service.downloadBuffer('stream-large.xlsx', 100); // 100 bytes limit
+      stream.push(Buffer.alloc(60, 'a'));
+      stream.push(Buffer.alloc(60, 'b')); // 120 bytes > 100 bytes
+
+      await expect(promise).rejects.toThrow('S3 download exceeded max size of 100 bytes');
+      expect(destroySpy).toHaveBeenCalled();
+    });
   });
 });

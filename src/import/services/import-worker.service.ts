@@ -781,6 +781,13 @@ export class ImportWorkerService {
           this.logger.warn(
             `Job ${jobId} was reclaimed/aborted (current status: ${currentJobDoc.status}). Skipping Stage 3 transaction.`,
           );
+          if (uploadedS3Keys.length > 0) {
+            try {
+              await this.storageService.deleteObjects(uploadedS3Keys);
+            } catch (delErr: unknown) {
+              this.logger.warn(`Failed to cleanup uploaded S3 objects on zombie abort: ${delErr}`);
+            }
+          }
           return;
         }
 
@@ -789,14 +796,19 @@ export class ImportWorkerService {
             for (const spu of validSpus) {
               if (spu.isExistingSpu) {
                 // SF-02: TOCTOU check for existing SPU status within session
-                const freshSpu = await this.productRepo.findById(
+                const freshSpu = await this.productRepo.findByIdOrCode(
+                  job.shop_id,
                   spu.assignedProductId || spu.productRefId,
                   session,
                 );
+                if (!freshSpu) {
+                  throw new Error(
+                    `Sản phẩm '${spu.productRefId}' không còn tồn tại trong hệ thống, không thể bổ sung biến thể.`,
+                  );
+                }
                 if (
-                  freshSpu &&
-                  (freshSpu.status === ProductStatus.BLOCKED ||
-                    freshSpu.status === ProductStatus.ARCHIVED)
+                  freshSpu.status === ProductStatus.BLOCKED ||
+                  freshSpu.status === ProductStatus.ARCHIVED
                 ) {
                   throw new Error(
                     `Sản phẩm '${spu.productRefId}' đã chuyển sang trạng thái ${freshSpu.status}, không thể bổ sung biến thể.`,
@@ -1083,7 +1095,33 @@ export class ImportWorkerService {
         }
       }
 
-      await job.save();
+      // SF-3: Use atomic conditional update to ensure job is still in PROCESSING status before committing COMPLETED
+      const updatedJob = await this.importJobRepo.update(
+        { _id: jobId, status: ImportJobStatus.PROCESSING },
+        {
+          $set: {
+            status: ImportJobStatus.COMPLETED,
+            total_rows: rawRows.length,
+            processed_rows: rawRows.length,
+            success_count: validSpus.length,
+            error_count: failedSkuRowsCount,
+            error_summary: combinedErrorSummary,
+            result_file_url: job.result_file_url,
+            completed_at: job.completed_at,
+            locked_until: null,
+          },
+        },
+      );
+      if (!updatedJob) {
+        this.logger.warn(
+          `Job ${jobId} was modified/reclaimed before completion finalization. Skipping COMPLETED commit.`,
+        );
+        return;
+      }
+
+      if (typeof job.save === 'function') {
+        await job.save();
+      }
 
       this.logger.log(
         `Job ${jobId} finished: success=${validSpus.length} SPUs, failed_rows=${failedSkuRowsCount}/${rawRows.length}`,

@@ -47,6 +47,7 @@ describe('SellerImportController - POST /seller/products/import', () => {
 
   const mockS3StorageService = {
     uploadBuffer: jest.fn().mockResolvedValue(undefined),
+    deleteObjects: jest.fn().mockResolvedValue(undefined),
   };
 
   const activeActor: ActorContext = {
@@ -282,5 +283,32 @@ describe('SellerImportController - POST /seller/products/import', () => {
       const res = (err as ForbiddenException).getResponse() as any;
       expect(res.code).toBe('PRODUCT_FORBIDDEN');
     }
+  });
+
+  it('should clean up uploaded file on S3 when job creation fails (SF-03)', async () => {
+    mockShopSnapshotRepository.findByShopId.mockResolvedValue({
+      shop_id: activeActor.shopScope,
+      shop_status: ShopStatus.ACTIVE,
+    });
+    mockImportJobRepository.findActiveJobByShop.mockResolvedValue(null);
+
+    const mongoDupError: any = new Error('E11000 duplicate key error');
+    mongoDupError.code = 11000;
+    mockImportJobRepository.create.mockRejectedValueOnce(mongoDupError);
+
+    const validFile: UploadedFilePayload = {
+      originalname: 'products.xlsx',
+      mimetype: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      size: validXlsxBuffer.length,
+      buffer: validXlsxBuffer,
+    };
+
+    await expect(
+      controller.uploadImportFile(validFile, activeActor.shopScope!, activeActor),
+    ).rejects.toThrow(ConflictException);
+
+    expect(mockS3StorageService.deleteObjects).toHaveBeenCalledTimes(1);
+    const deletedKeys = mockS3StorageService.deleteObjects.mock.calls[0][0];
+    expect(deletedKeys[0]).toMatch(new RegExp(`^imports/shop-${activeActor.shopScope}/.*\\.xlsx$`));
   });
 });

@@ -238,7 +238,22 @@ export class ExcelResultService {
               cell.value = ExcelFormulaSanitizer.sanitize(String(res || rawFormula));
             } else if (typeof cell.value === 'string') {
               cell.value = ExcelFormulaSanitizer.sanitize(cell.value);
-            } else if (typeof cell.value === 'object' && 'text' in cell.value) {
+            } else if (
+              typeof cell.value === 'object' &&
+              cell.value !== null &&
+              'richText' in cell.value &&
+              Array.isArray((cell.value as any).richText)
+            ) {
+              (cell.value as any).richText.forEach((item: any) => {
+                if (item && typeof item.text === 'string') {
+                  item.text = ExcelFormulaSanitizer.sanitize(item.text);
+                }
+              });
+            } else if (
+              typeof cell.value === 'object' &&
+              cell.value !== null &&
+              'text' in cell.value
+            ) {
               (cell.value as any).text = ExcelFormulaSanitizer.sanitize((cell.value as any).text);
             }
           }
@@ -396,15 +411,15 @@ export class ExcelResultService {
           error_code: ExcelFormulaSanitizer.sanitize(err.error_code),
           error_message: ExcelFormulaSanitizer.sanitize(err.error_message),
         });
-        const isWarning =
-          err.error_code?.includes('WARNING') ||
-          err.error_code === 'MEDIA_DOWNLOAD_FAILED' ||
-          err.error_message?.startsWith('WARNING');
+        const isWarning = this.isWarningError(err);
         addedRow.eachCell((cell) => {
           cell.fill = {
             type: 'pattern',
             pattern: 'solid',
             fgColor: { argb: isWarning ? 'FFFFEB9C' : 'FFFFE2DD' },
+          };
+          cell.font = {
+            color: { argb: isWarning ? 'FF9C5700' : 'FF9C0006' },
           };
         });
         addedRow.commit();
