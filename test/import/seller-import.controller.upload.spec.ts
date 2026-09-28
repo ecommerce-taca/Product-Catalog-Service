@@ -127,6 +127,7 @@ describe('SellerImportController - POST /seller/products/import', () => {
     expect(result).toBeDefined();
     expect(result.job_id).toBeDefined();
     expect(result.status).toBe(ImportJobStatus.PENDING);
+    expect(result.total_rows).toBeNull();
     expect(result.message).toContain('đang xếp hàng');
     expect(mockS3StorageService.uploadBuffer).toHaveBeenCalledWith(
       expect.stringContaining(`imports/shop-${activeActor.shopScope}/`),

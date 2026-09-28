@@ -1119,10 +1119,6 @@ export class ImportWorkerService {
         return;
       }
 
-      if (typeof job.save === 'function') {
-        await job.save();
-      }
-
       this.logger.log(
         `Job ${jobId} finished: success=${validSpus.length} SPUs, failed_rows=${failedSkuRowsCount}/${rawRows.length}`,
       );

@@ -16,6 +16,7 @@ import {
   Query,
   Req,
   Res,
+  ServiceUnavailableException,
   UploadedFile,
   UseInterceptors,
 } from '@nestjs/common';
@@ -81,12 +82,6 @@ export class SellerImportController {
   /**
    * Generates or retrieves an Excel template (.xlsx) for bulk product import (FR-IM-01).
    * Supports custom row count, layout mode, category filter, and product pre-population.
-   * By default, returns a JSON envelope containing the Presigned Download URL.
-   * If client explicitly requests binary stream (via Accept header), streams the file.
-   * Enforces shop status check: SUSPENDED shops are rejected with 403 PRODUCT_SHOP_SUSPENDED (BR-IM-01).
-   */
-  /**
-   * Generates an Excel template (.xlsx) for bulk product import (FR-IM-01) with custom filters.
    * By default, returns a JSON envelope containing the Presigned Download URL.
    * If client explicitly requests binary stream (via Accept header), streams the file.
    * Enforces shop status check: SUSPENDED shops are rejected with 403 PRODUCT_SHOP_SUSPENDED (BR-IM-01).
@@ -321,6 +316,7 @@ export class SellerImportController {
     return {
       job_id: jobId,
       status: ImportJobStatus.PENDING,
+      total_rows: null,
       created_at: job.created_at || new Date(),
       message: 'Tác vụ nhập sản phẩm đã được tiếp nhận và đang xếp hàng xử lý.',
     };
@@ -520,7 +516,7 @@ export class SellerImportController {
 
     // Direct binary download (.xlsx)
     if (!this.excelResultService) {
-      throw new BadRequestException({
+      throw new ServiceUnavailableException({
         code: 'PRODUCT_IMPORT_SERVICE_UNAVAILABLE',
         message: 'Dịch vụ xuất file Excel chưa sẵn sàng.',
       });
