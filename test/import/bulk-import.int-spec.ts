@@ -244,6 +244,26 @@ class InMemoryProductRepo {
     return item ? ({ ...item } as unknown as ProductDocument) : null;
   }
 
+  async findByShopAndId(shopId: string, id: string): Promise<ProductDocument | null> {
+    const item = this.products.get(String(id));
+    return item && item.shop_id === shopId ? ({ ...item } as unknown as ProductDocument) : null;
+  }
+
+  async findByIdOrCode(shopId: string, idOrCode: string): Promise<ProductDocument | null> {
+    const trimmed = (idOrCode || '').trim();
+    if (!trimmed) return null;
+    const upper = trimmed.toUpperCase();
+    for (const p of this.products.values()) {
+      if (
+        p.shop_id === shopId &&
+        (p._id === trimmed || (p.product_code && p.product_code.toUpperCase() === upper))
+      ) {
+        return { ...p } as unknown as ProductDocument;
+      }
+    }
+    return null;
+  }
+
   async find(filter: any = {}, _options?: any): Promise<ProductDocument[]> {
     let list = Array.from(this.products.values());
     if (filter._id) {
@@ -342,6 +362,18 @@ class InMemoryCategoryRepo {
   async findById(id: string): Promise<CategoryDocument | null> {
     const cat = this.categories.get(String(id));
     return cat ? ({ ...cat } as unknown as CategoryDocument) : null;
+  }
+
+  async findByIdOrCode(idOrCode: string): Promise<CategoryDocument | null> {
+    const trimmed = (idOrCode || '').trim();
+    if (!trimmed) return null;
+    const upper = trimmed.toUpperCase();
+    for (const c of this.categories.values()) {
+      if (c._id === trimmed || (c.category_code && c.category_code.toUpperCase() === upper)) {
+        return { ...c } as unknown as CategoryDocument;
+      }
+    }
+    return null;
   }
 
   async find(): Promise<CategoryDocument[]> {
@@ -611,6 +643,14 @@ describe('Bulk Product Import Integration Spec [PCAT-IMP-05]', () => {
 
   const mockS3StorageService = {
     bucket: 'taca-product-import-files',
+    downloadBuffer: jest.fn(async (key: string) => {
+      const cleanKey = key.replace(/^\//, '');
+      const buffer = s3StorageMap.get(cleanKey);
+      if (!buffer) {
+        throw new Error(`NoSuchKey: ${cleanKey}`);
+      }
+      return buffer;
+    }),
     s3Client: {
       send: jest.fn(async (command: any) => {
         const key = command.input?.Key?.replace(/^\//, '');

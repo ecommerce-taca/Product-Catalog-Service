@@ -235,9 +235,15 @@ export class S3StorageService {
   }
 
   /**
-   * Downloads an object from S3 as a complete Buffer (SHOULD-FIX-01).
+   * Downloads an object from S3 as a complete Buffer with size bound check.
    */
-  async downloadBuffer(objectKey: string): Promise<Buffer> {
+  async downloadBuffer(
+    objectKey: string,
+    maxSizeBytes: number = 20 * 1024 * 1024,
+  ): Promise<Buffer> {
+    if (!objectKey || typeof objectKey !== 'string' || !objectKey.trim()) {
+      throw new Error('S3 objectKey must be a non-empty string');
+    }
     const cleanKey = objectKey.replace(/^\//, '');
     const command = new GetObjectCommand({
       Bucket: this.bucket,
@@ -247,10 +253,21 @@ export class S3StorageService {
     if (!response.Body) {
       throw new Error(`S3 response body is empty for key: ${objectKey}`);
     }
+    if (response.ContentLength && response.ContentLength > maxSizeBytes) {
+      throw new Error(`S3 object ${objectKey} exceeds max size of ${maxSizeBytes} bytes`);
+    }
     const chunks: Buffer[] = [];
+    let totalBytes = 0;
     const stream = response.Body as unknown as NodeJS.ReadableStream;
     for await (const chunk of stream) {
-      chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : (chunk as Buffer));
+      const buf = typeof chunk === 'string' ? Buffer.from(chunk) : (chunk as Buffer);
+      totalBytes += buf.length;
+      if (totalBytes > maxSizeBytes) {
+        throw new Error(
+          `S3 download exceeded max size of ${maxSizeBytes} bytes for key ${objectKey}`,
+        );
+      }
+      chunks.push(buf);
     }
     return Buffer.concat(chunks);
   }

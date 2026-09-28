@@ -1,9 +1,7 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { GetObjectCommand } from '@aws-sdk/client-s3';
 import * as ExcelJS from 'exceljs';
-import { Readable } from 'stream';
 
-import { ImportJobDocument } from '../../database/schemas/import-job.schema';
+import { ImportJobDocument, ImportJobStatus } from '../../database/schemas/import-job.schema';
 import { S3StorageService } from '../../integrations/storage/s3-storage.service';
 import { ImportJobRepositoryPort } from '../repositories/import-job.repository.interface';
 import { ExcelFormulaSanitizer } from '../utils/excel-formula-sanitizer.util';
@@ -30,6 +28,12 @@ export class ExcelResultService {
    * Applies ExcelFormulaSanitizer (CWE-1236, Lesson L-07) to 100% of text cells.
    */
   async generateResultBuffer(job: ImportJobDocument): Promise<Buffer> {
+    // BLOCKER-01: If job failed globally (timeout, worker crash, stage 3 transaction abort),
+    // immediately return clean fallback summary sheet instead of false SUCCESS annotations on original rows.
+    if (job.status === ImportJobStatus.FAILED) {
+      return this.generateFallbackBuffer(job);
+    }
+
     if (job.file_url) {
       try {
         const originalBuffer = await this.downloadOriginalFile(job.file_url);
@@ -79,23 +83,7 @@ export class ExcelResultService {
 
   private async downloadOriginalFile(fileUrl: string): Promise<Buffer | null> {
     try {
-      if (typeof this.storageService.downloadBuffer === 'function') {
-        return await this.storageService.downloadBuffer(fileUrl);
-      }
-      const cleanKey = fileUrl.replace(/^\//, '');
-      const command = new GetObjectCommand({
-        Bucket: this.storageService.bucket,
-        Key: cleanKey,
-      });
-      const response = await this.storageService.s3Client.send(command);
-      const stream = response.Body as Readable;
-
-      return new Promise<Buffer>((resolve, reject) => {
-        const chunks: Buffer[] = [];
-        stream.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
-        stream.on('error', (err) => reject(err));
-        stream.on('end', () => resolve(Buffer.concat(chunks)));
-      });
+      return await this.storageService.downloadBuffer(fileUrl);
     } catch (err: unknown) {
       this.logger.warn(
         `Failed to download original file from S3: ${err instanceof Error ? err.message : String(err)}`,
@@ -408,11 +396,15 @@ export class ExcelResultService {
           error_code: ExcelFormulaSanitizer.sanitize(err.error_code),
           error_message: ExcelFormulaSanitizer.sanitize(err.error_message),
         });
+        const isWarning =
+          err.error_code?.includes('WARNING') ||
+          err.error_code === 'MEDIA_DOWNLOAD_FAILED' ||
+          err.error_message?.startsWith('WARNING');
         addedRow.eachCell((cell) => {
           cell.fill = {
             type: 'pattern',
             pattern: 'solid',
-            fgColor: { argb: 'FFFFE2DD' },
+            fgColor: { argb: isWarning ? 'FFFFEB9C' : 'FFFFE2DD' },
           };
         });
         addedRow.commit();

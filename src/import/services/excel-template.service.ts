@@ -46,10 +46,7 @@ export class ExcelTemplateService {
   ): Promise<TemplatePresignedResult> {
     if (dto.category_ids && dto.category_ids.length > 0) {
       for (const catId of dto.category_ids) {
-        const category =
-          typeof this.categoryRepository.findByIdOrCode === 'function'
-            ? await this.categoryRepository.findByIdOrCode(catId)
-            : await this.categoryRepository.findById(catId);
+        const category = await this.categoryRepository.findByIdOrCode(catId);
         if (!category || category.status !== CategoryStatus.ACTIVE) {
           throw new BadRequestException({
             code: 'PRODUCT_CATEGORY_INVALID',
@@ -125,10 +122,7 @@ export class ExcelTemplateService {
     const categories: CategoryDocument[] = [];
     if (dto.category_ids && dto.category_ids.length > 0) {
       for (const catId of dto.category_ids) {
-        const cat =
-          typeof this.categoryRepository.findByIdOrCode === 'function'
-            ? await this.categoryRepository.findByIdOrCode(catId)
-            : await this.categoryRepository.findById(catId);
+        const cat = await this.categoryRepository.findByIdOrCode(catId);
         if (!cat || cat.status !== CategoryStatus.ACTIVE) {
           throw new BadRequestException({
             code: 'PRODUCT_CATEGORY_INVALID',
@@ -143,17 +137,11 @@ export class ExcelTemplateService {
     const prefillProducts: ProductDocument[] = [];
     if (dto.product_ids && dto.product_ids.length > 0 && this.productRepository && shopId) {
       for (const prodId of dto.product_ids) {
-        const prod =
-          typeof this.productRepository.findByIdOrCode === 'function'
-            ? await this.productRepository.findByIdOrCode(shopId, prodId)
-            : await this.productRepository.findByShopAndId(shopId, prodId);
+        const prod = await this.productRepository.findByIdOrCode(shopId, prodId);
         if (prod) {
           prefillProducts.push(prod);
           if (categories.length === 0 && prod.primary_category_id) {
-            const cat =
-              typeof this.categoryRepository.findByIdOrCode === 'function'
-                ? await this.categoryRepository.findByIdOrCode(prod.primary_category_id)
-                : await this.categoryRepository.findById(prod.primary_category_id);
+            const cat = await this.categoryRepository.findByIdOrCode(prod.primary_category_id);
             if (
               cat &&
               cat.status === CategoryStatus.ACTIVE &&
@@ -471,7 +459,7 @@ export class ExcelTemplateService {
     // SPU 1: AO-POLO-NAM (4 biến thể: Trắng-M, Trắng-L, Đen-M, Đen-L), giá 250.000
     sheetExample.addRow({
       product_ref_id: 'AO-POLO-NAM',
-      title: 'Áo Polo Coolmate [PRD-8K2N9X]',
+      title: 'Áo Polo Coolmate Nam Cao Cấp',
       category_id: catVal,
       description:
         'Chất liệu vải cá sấu mè cao cấp, co giãn 4 chiều, thấm hút mồ hôi tối đa, thoáng khí giữ form chuẩn.',
@@ -534,7 +522,7 @@ export class ExcelTemplateService {
     // SPU 2: BALO-CHONG-NUOC (1 biến thể đơn duy nhất: Đen Carbon - Tiêu chuẩn 45L), giá 450.000
     sheetExample.addRow({
       product_ref_id: 'BALO-CHONG-NUOC',
-      title: 'Balo Du Lịch Chống Nước Đa Năng 45L [PRD-BALO45L]',
+      title: 'Balo Du Lịch Chống Nước Đa Năng 45L',
       category_id: catVal,
       description:
         'Vải Oxford cao cấp chống nước tuyệt đối, quai đeo đệm thoáng khí, ngăn laptop 15.6 inch.',
@@ -551,7 +539,7 @@ export class ExcelTemplateService {
     // SPU 3: GIAY-SNEAKER (3 biến thể: Trắng-39, Trắng-40, Trắng-41), giá 500.000
     sheetExample.addRow({
       product_ref_id: 'GIAY-SNEAKER',
-      title: 'Giày Sneaker Thể Thao Nam Nữ [PRD-SNK001]',
+      title: 'Giày Sneaker Thể Thao Nam Nữ',
       category_id: catVal,
       description:
         'Đế cao su lưu hóa siêu êm, thân vải canvas thoáng khí, thiết kế trẻ trung năng động.',

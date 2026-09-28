@@ -11,6 +11,7 @@ describe('ExcelResultService', () => {
 
   const mockS3StorageService = {
     bucket: 'test-bucket',
+    downloadBuffer: jest.fn(),
     s3Client: {
       send: jest.fn(),
     },
@@ -27,6 +28,18 @@ describe('ExcelResultService', () => {
 
   beforeEach(async () => {
     jest.clearAllMocks();
+
+    mockS3StorageService.downloadBuffer.mockImplementation(async (key: string) => {
+      const res = await mockS3StorageService.s3Client.send({ input: { Key: key } });
+      if (res && res.Body) {
+        const chunks: Buffer[] = [];
+        for await (const chunk of res.Body) {
+          chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : (chunk as Buffer));
+        }
+        return Buffer.concat(chunks);
+      }
+      return Buffer.from('');
+    });
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -227,6 +240,41 @@ describe('ExcelResultService', () => {
       expect(errorRow.getCell(2).value).toBe(4);
       expect(errorRow.getCell(3).value).toBe('PROD-ERR-99');
       expect(errorRow.getCell(6).value).toBe('Danh mục không tồn tại.');
+    });
+
+    it('should redirect to fallback error summary workbook when job.status === FAILED to prevent ghost success annotations (BLOCKER-01)', async () => {
+      const failedJob: Partial<ImportJobDocument> = {
+        _id: '01923456-789a-7bc8-9def-0123456789ff',
+        shop_id: '01912f20-0001-7000-8000-000000000001',
+        file_url: 'imports/shop-01/failed-file.xlsx',
+        status: ImportJobStatus.FAILED,
+        total_rows: 2,
+        processed_rows: 0,
+        success_count: 0,
+        error_count: 1,
+        error_summary: [
+          {
+            row_index: 0,
+            product_ref_id: 'SYSTEM',
+            error_code: 'PRODUCT_IMPORT_WORKER_TIMEOUT',
+            error_message: 'Tiến trình import bị quá hạn heartbeat.',
+          },
+        ],
+      };
+
+      const resultBuffer = await service.generateResultBuffer(failedJob as ImportJobDocument);
+      expect(resultBuffer).toBeInstanceOf(Buffer);
+
+      const resultWorkbook = new ExcelJS.Workbook();
+      await resultWorkbook.xlsx.load(resultBuffer as any);
+
+      // Must be fallback sheet 'Báo cáo kết quả', NOT original 'Sản phẩm & Biến thể'
+      const sheet = resultWorkbook.getWorksheet('Báo cáo kết quả');
+      expect(sheet).toBeDefined();
+
+      const errorRow = sheet!.getRow(2);
+      expect(errorRow.getCell(3).value).toBe('SYSTEM');
+      expect(errorRow.getCell(5).value).toBe('PRODUCT_IMPORT_WORKER_TIMEOUT');
     });
 
     it('should skip empty template rows and not label them as SUCCESS or FAILED (B-UX-01 / B-LR-02)', async () => {

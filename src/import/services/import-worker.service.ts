@@ -1,10 +1,8 @@
 import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
-import { GetObjectCommand } from '@aws-sdk/client-s3';
 import * as ExcelJS from 'exceljs';
 import * as crypto from 'crypto';
 import sanitizeHtml from 'sanitize-html';
 import { v7 as uuidv7 } from 'uuid';
-import { Readable } from 'stream';
 
 import { ImportErrorDetail, ImportJobStatus } from '../../database/schemas/import-job.schema';
 import { ProductPriceSummary, ProductStatus } from '../../database/schemas/product.schema';
@@ -30,7 +28,6 @@ import { ExcelResultService } from './excel-result.service';
 
 const SYSTEM_ACTOR_ID = '01910000-0000-7000-8000-000000000000';
 const GLOBAL_MAX_CONCURRENT_WORKERS = 3;
-const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const STRICT_SANITIZE_OPTIONS: sanitizeHtml.IOptions = {
   allowedTags: ['p', 'br', 'strong', 'em', 'b', 'i', 'u', 'ul', 'ol', 'li', 'h3', 'h4', 'a', 'img'],
@@ -257,7 +254,7 @@ export class ImportWorkerService {
           {
             row_index: 0,
             product_ref_id: 'SYSTEM',
-            error_code: 'PRODUCT_IMPORT_INVALID_FORMAT',
+            error_code: 'PRODUCT_IMPORT_FILE_CORRUPT',
             error_message: `Định dạng tệp Excel không hợp lệ hoặc bị hỏng: ${msg}`,
           },
         ];
@@ -279,7 +276,7 @@ export class ImportWorkerService {
           {
             row_index: 0,
             product_ref_id: 'SYSTEM',
-            error_code: 'PRODUCT_IMPORT_INVALID_FORMAT',
+            error_code: 'PRODUCT_IMPORT_FILE_CORRUPT',
             error_message: 'Tệp Excel không chứa sheet dữ liệu.',
           },
         ];
@@ -498,16 +495,7 @@ export class ImportWorkerService {
         if (refId) {
           try {
             let existingProduct: any = null;
-            if (typeof this.productRepo.findByIdOrCode === 'function') {
-              existingProduct = await this.productRepo.findByIdOrCode(job.shop_id, refId);
-            } else if (UUID_REGEX.test(refId)) {
-              existingProduct = await this.productRepo.findById(refId);
-            } else {
-              existingProduct = await this.productRepo.findOne({
-                shop_id: job.shop_id,
-                product_code: refId.toUpperCase(),
-              });
-            }
+            existingProduct = await this.productRepo.findByIdOrCode(job.shop_id, refId);
 
             if (existingProduct && existingProduct.shop_id === job.shop_id) {
               spu.isExistingSpu = true;
@@ -610,13 +598,7 @@ export class ImportWorkerService {
       for (const rawCatId of candidateCategoryIds) {
         let cat: any = null;
         try {
-          if (typeof this.categoryRepo.findByIdOrCode === 'function') {
-            cat = await this.categoryRepo.findByIdOrCode(rawCatId);
-          } else if (UUID_REGEX.test(rawCatId)) {
-            cat = await this.categoryRepo.findById(rawCatId);
-          } else {
-            cat = await this.categoryRepo.findOne({ category_code: rawCatId.toUpperCase() });
-          }
+          cat = await this.categoryRepo.findByIdOrCode(rawCatId);
         } catch (err: unknown) {
           this.logger.warn(`Failed to resolve category for '${rawCatId}': ${err}`);
         }
@@ -789,9 +771,38 @@ export class ImportWorkerService {
       }
 
       if (validSpus.length > 0) {
+        // SF-01: Ensure job has not been reclaimed or aborted while waiting for Stage 2 downloads
+        const currentJobDoc = await this.importJobRepo.findById(jobId);
+        if (
+          currentJobDoc &&
+          (currentJobDoc.status === ImportJobStatus.FAILED ||
+            currentJobDoc.status === ImportJobStatus.COMPLETED)
+        ) {
+          this.logger.warn(
+            `Job ${jobId} was reclaimed/aborted (current status: ${currentJobDoc.status}). Skipping Stage 3 transaction.`,
+          );
+          return;
+        }
+
         try {
           await this.transactionRunner.execute(async (session) => {
             for (const spu of validSpus) {
+              if (spu.isExistingSpu) {
+                // SF-02: TOCTOU check for existing SPU status within session
+                const freshSpu = await this.productRepo.findById(
+                  spu.assignedProductId || spu.productRefId,
+                  session,
+                );
+                if (
+                  freshSpu &&
+                  (freshSpu.status === ProductStatus.BLOCKED ||
+                    freshSpu.status === ProductStatus.ARCHIVED)
+                ) {
+                  throw new Error(
+                    `Sản phẩm '${spu.productRefId}' đã chuyển sang trạng thái ${freshSpu.status}, không thể bổ sung biến thể.`,
+                  );
+                }
+              }
               const productId =
                 spu.assignedProductId || (spu.isExistingSpu ? spu.productRefId : uuidv7());
               const cleanTitle = spu.title.trim();
@@ -930,24 +941,25 @@ export class ImportWorkerService {
               }
 
               // 5. Update price_summary for existing SPU if new SKU has lower price
+              // BLOCKER-03: Use atomic MongoDB query filter to prevent Lost Update Race Condition
               if (spu.isExistingSpu && spu.existingProduct) {
-                const currentBasePrice =
-                  spu.existingProduct.price_summary?.base_price != null
-                    ? BigInt(spu.existingProduct.price_summary.base_price)
-                    : null;
                 const newMinPrice = BigInt(minPrice);
-                if (currentBasePrice === null || newMinPrice < currentBasePrice) {
-                  await this.productRepo.update(
-                    { _id: productId },
-                    {
-                      $set: {
-                        'price_summary.base_price': newMinPrice,
-                        'price_summary.sale_price': newMinPrice,
-                      },
+                await this.productRepo.update(
+                  {
+                    _id: productId,
+                    $or: [
+                      { 'price_summary.base_price': { $gt: newMinPrice } },
+                      { 'price_summary.base_price': null },
+                    ],
+                  },
+                  {
+                    $set: {
+                      'price_summary.base_price': newMinPrice,
+                      'price_summary.sale_price': newMinPrice,
                     },
-                    session,
-                  );
-                }
+                  },
+                  session,
+                );
               }
 
               // 6. Outbox events: SPU (product.created) FIRST, then child SKUs (sku.created)
@@ -1000,6 +1012,7 @@ export class ImportWorkerService {
           job.status = ImportJobStatus.FAILED;
           job.locked_until = null;
           job.completed_at = new Date();
+          job.error_count = rawRows.length || 1;
           if (!job.error_summary) {
             job.error_summary = [];
           }
@@ -1037,6 +1050,19 @@ export class ImportWorkerService {
       const failedSkuRowsCount =
         rawRows.length - validSpus.reduce((acc, spu) => acc + spu.skus.length, 0);
 
+      // SF-01: Ensure we do not overwrite a job that was reclaimed by timeout or aborted
+      const latestJob = await this.importJobRepo.findById(jobId);
+      if (
+        latestJob &&
+        (latestJob.status === ImportJobStatus.FAILED ||
+          latestJob.status === ImportJobStatus.COMPLETED)
+      ) {
+        this.logger.warn(
+          `Job ${jobId} was reclaimed/aborted (current status: ${latestJob.status}). Skipping COMPLETED finalization.`,
+        );
+        return;
+      }
+
       job.status = ImportJobStatus.COMPLETED;
       job.total_rows = rawRows.length;
       job.processed_rows = rawRows.length;
@@ -1071,23 +1097,7 @@ export class ImportWorkerService {
   }
 
   private async downloadBufferFromStorage(fileUrl: string): Promise<Buffer> {
-    if (typeof this.storageService.downloadBuffer === 'function') {
-      return this.storageService.downloadBuffer(fileUrl);
-    }
-    const cleanKey = fileUrl.replace(/^\//, '');
-    const command = new GetObjectCommand({
-      Bucket: this.storageService.bucket,
-      Key: cleanKey,
-    });
-    const response = await this.storageService.s3Client.send(command);
-    const stream = response.Body as Readable;
-
-    return new Promise<Buffer>((resolve, reject) => {
-      const chunks: Buffer[] = [];
-      stream.on('data', (chunk) => chunks.push(Buffer.from(chunk)));
-      stream.on('error', (err) => reject(err));
-      stream.on('end', () => resolve(Buffer.concat(chunks)));
-    });
+    return this.storageService.downloadBuffer(fileUrl);
   }
 
   private mapHeaderColumns(headerRow: ExcelJS.Row): Map<string, number> {
