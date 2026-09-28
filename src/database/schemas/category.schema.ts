@@ -124,7 +124,11 @@ CategorySchema.virtual('category_id').get(function () {
 CategorySchema.index({ slug: 1 }, { unique: true, name: 'idx_categories_slug_unique' });
 CategorySchema.index(
   { category_code: 1 },
-  { unique: true, sparse: true, name: 'idx_category_code_unique_sparse' },
+  {
+    unique: true,
+    partialFilterExpression: { category_code: { $type: 'string' } },
+    name: 'idx_category_code_unique_partial',
+  },
 );
 CategorySchema.index(
   { parent_id: 1, name: 1 },

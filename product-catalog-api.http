@@ -713,6 +713,39 @@ x-user-shop-scope: {{sellerShopScope}}
   ]
 }
 
+### [10.1e] Tải template sử dụng Business Code ngắn gọn (category_code: CAT-1001)
+# Mô tả: Người bán truyền mã danh mục ngắn gọn CAT-1001 thay cho chuỗi UUIDv7
+# Mong đợi: 200 OK kèm presigned download URL
+POST {{baseUrl}}/seller/products/import/template
+Content-Type: application/json
+Accept: application/json
+x-user-id: {{sellerId}}
+x-user-roles: {{sellerRoles}}
+x-user-shop-scope: {{sellerShopScope}}
+
+{
+  "category_ids": [
+    "CAT-1001"
+  ],
+  "layout_mode": "SINGLE_SHEET"
+}
+
+### [10.1f] Tải template điền sẵn SPU sử dụng Product Business Code (product_code: PRD-8K2N9X)
+# Mô tả: Người bán truyền mã sản phẩm ngắn gọn PRD-8K2N9X để bổ sung biến thể vào SPU hiện hữu
+# Mong đợi: 200 OK kèm presigned download URL
+POST {{baseUrl}}/seller/products/import/template
+Content-Type: application/json
+Accept: application/json
+x-user-id: {{sellerId}}
+x-user-roles: {{sellerRoles}}
+x-user-shop-scope: {{sellerShopScope}}
+
+{
+  "product_ids": [
+    "PRD-8K2N9X"
+  ]
+}
+
 ### [10.6a] Upload file Excel 100% hợp lệ (sample-import-live.xlsx với SKU tươi mới) -> 202 Accepted
 # Mô tả: File 'sample-import-live.xlsx' bao gồm 3 SPU (6 dòng SKU):
 # - SPU 1 (REF-AO-NAM-*): Đa biến thể (4 SKUs kết hợp Màu sắc & Kích cỡ), đầy đủ ảnh, giá, barcode

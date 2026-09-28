@@ -1,4 +1,4 @@
-import { IsArray, IsEnum, IsInt, IsOptional, IsUUID, Max, Min } from 'class-validator';
+import { IsArray, IsEnum, IsInt, IsOptional, Matches, Max, Min } from 'class-validator';
 import { Type } from 'class-transformer';
 
 export enum TemplateLayoutMode {
@@ -21,13 +21,19 @@ export class GenerateCustomTemplateDto {
   row_count?: number;
 
   @IsOptional()
-  @IsArray({ message: 'category_ids phải là một mảng chuỗi UUID' })
-  @IsUUID(undefined, { each: true, message: 'Mỗi category_id phải là định dạng UUID hợp lệ' })
+  @IsArray({ message: 'category_ids phải là một mảng chuỗi UUID hoặc mã danh mục' })
+  @Matches(/^[A-Za-z0-9_-]{3,36}$/, {
+    each: true,
+    message: 'Mỗi category_id phải là định dạng UUID hoặc mã danh mục hợp lệ',
+  })
   category_ids?: string[];
 
   @IsOptional()
-  @IsArray({ message: 'product_ids phải là một mảng chuỗi UUID' })
-  @IsUUID(undefined, { each: true, message: 'Mỗi product_id phải là định dạng UUID hợp lệ' })
+  @IsArray({ message: 'product_ids phải là một mảng chuỗi UUID hoặc mã sản phẩm' })
+  @Matches(/^[A-Za-z0-9_-]{3,36}$/, {
+    each: true,
+    message: 'Mỗi product_id phải là định dạng UUID hoặc mã sản phẩm hợp lệ',
+  })
   product_ids?: string[];
 
   @IsOptional()

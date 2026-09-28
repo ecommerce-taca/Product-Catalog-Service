@@ -24,7 +24,25 @@ export function isPrivateOrBlockedIp(ip: string): boolean {
     if (o1 === 172 && o2 >= 16 && o2 <= 31) return true; // 172.16.0.0/12 (Private)
     if (o1 === 192 && o2 === 168) return true; // 192.168.0.0/16 (Private)
     if (o1 === 169 && o2 === 254) return true; // 169.254.0.0/16 (Link-local / Cloud Metadata)
+    if (o1 === 100 && o2 >= 64 && o2 <= 127) return true; // 100.64.0.0/10 (CGNAT / Shared Address Space)
     if (o1 >= 224) return true; // Multicast & Reserved
+  }
+
+  // IPv4-mapped IPv6 addresses (e.g. ::ffff:172.16.0.1, [::ffff:127.0.0.1], or normalized hex ::ffff:ac10:1)
+  const strippedIp = cleanIp.replace(/^\[|\]$/g, '').toLowerCase();
+  const dotMatch = strippedIp.match(/^::ffff:(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})$/);
+  if (dotMatch) {
+    return isPrivateOrBlockedIp(dotMatch[1]);
+  }
+  const hexMatch = strippedIp.match(/^::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})$/);
+  if (hexMatch) {
+    const h1 = parseInt(hexMatch[1], 16);
+    const h2 = parseInt(hexMatch[2], 16);
+    const o1 = (h1 >> 8) & 0xff;
+    const o2 = h1 & 0xff;
+    const o3 = (h2 >> 8) & 0xff;
+    const o4 = h2 & 0xff;
+    return isPrivateOrBlockedIp(`${o1}.${o2}.${o3}.${o4}`);
   }
 
   // IPv6 addresses
@@ -34,11 +52,7 @@ export function isPrivateOrBlockedIp(ip: string): boolean {
     cleanIp === '::' ||
     cleanIp.startsWith('fe80:') ||
     cleanIp.startsWith('fc00:') ||
-    cleanIp.startsWith('fd00:') ||
-    cleanIp.includes('::ffff:127.') ||
-    cleanIp.includes('::ffff:10.') ||
-    cleanIp.includes('::ffff:192.168.') ||
-    cleanIp.includes('::ffff:169.254.')
+    cleanIp.startsWith('fd00:')
   ) {
     return true;
   }

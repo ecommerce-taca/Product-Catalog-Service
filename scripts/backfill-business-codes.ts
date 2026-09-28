@@ -52,7 +52,7 @@ export function generateProductCode(existingCodesForShop: Set<string>): string {
   let candidate = '';
   do {
     const randomHex = crypto.randomBytes(4).toString('hex').toUpperCase();
-    candidate = `PRD_${randomHex}`;
+    candidate = `PRD-${randomHex}`;
   } while (existingCodesForShop.has(candidate) || !PRODUCT_CODE_REGEX.test(candidate));
 
   existingCodesForShop.add(candidate);
@@ -118,8 +118,12 @@ export async function backfillBusinessCodes(mongoUri?: string): Promise<Backfill
         };
       });
 
-      const catWriteResult = await CategoryModel.bulkWrite(categoryBulkOps);
-      categoriesUpdated = catWriteResult.modifiedCount || 0;
+      const BATCH_SIZE = 1000;
+      for (let i = 0; i < categoryBulkOps.length; i += BATCH_SIZE) {
+        const batch = categoryBulkOps.slice(i, i + BATCH_SIZE);
+        const catWriteResult = await CategoryModel.bulkWrite(batch);
+        categoriesUpdated += catWriteResult.modifiedCount || 0;
+      }
     }
 
     // 2. Backfill Products
@@ -153,8 +157,12 @@ export async function backfillBusinessCodes(mongoUri?: string): Promise<Backfill
         };
       });
 
-      const prodWriteResult = await ProductModel.bulkWrite(productBulkOps);
-      productsUpdated = prodWriteResult.modifiedCount || 0;
+      const BATCH_SIZE = 1000;
+      for (let i = 0; i < productBulkOps.length; i += BATCH_SIZE) {
+        const batch = productBulkOps.slice(i, i + BATCH_SIZE);
+        const prodWriteResult = await ProductModel.bulkWrite(batch);
+        productsUpdated += prodWriteResult.modifiedCount || 0;
+      }
     }
 
     return {

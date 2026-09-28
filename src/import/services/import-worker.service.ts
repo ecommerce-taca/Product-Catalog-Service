@@ -42,7 +42,7 @@ const STRICT_SANITIZE_OPTIONS: sanitizeHtml.IOptions = {
 
 export function generateProductCode(): string {
   const randomHex = crypto.randomBytes(4).toString('hex').toUpperCase();
-  return `PRD_${randomHex}`;
+  return `PRD-${randomHex}`;
 }
 
 export function generateImportSlug(title: string, productId: string): string {
@@ -208,11 +208,7 @@ export class ImportWorkerService {
     let heartbeatTimer: NodeJS.Timeout | null = null;
     heartbeatTimer = setInterval(async () => {
       try {
-        const extendedLock = new Date(Date.now() + 120_000);
-        await this.importJobRepo.update(
-          { _id: jobId, status: ImportJobStatus.PROCESSING },
-          { locked_until: extendedLock },
-        );
+        await this.importJobRepo.updateHeartbeat(jobId, 120_000);
       } catch (hbErr: unknown) {
         this.logger.warn(`Heartbeat update failed for job ${jobId}: ${hbErr}`);
       }
@@ -858,7 +854,8 @@ export class ImportWorkerService {
                 );
               }
 
-              // 3. Insert SKUs (status: ACTIVE) and emit sku.created CDC events
+              // 3. Insert SKUs (status: ACTIVE) and collect sku.created CDC events
+              const pendingSkuEvents: any[] = [];
               for (const sku of spu.skus) {
                 const skuId = uuidv7();
                 await this.skuRepo.create(
@@ -877,32 +874,30 @@ export class ImportWorkerService {
                   session,
                 );
 
-                // Outbox event for SKU
-                await this.outboxRepo.saveEvent(
-                  {
-                    _id: uuidv7(),
-                    event_id: uuidv7(),
-                    aggregate_type: AggregateType.SKU,
-                    aggregate_id: skuId,
-                    event_type: 'sku.created',
-                    schema_version: 1,
-                    payload: {
-                      sku_id: skuId,
-                      product_id: productId,
-                      shop_id: job.shop_id,
-                      seller_sku: sku.sellerSku,
-                      variant_key: sku.variantKey,
-                      status: SkuStatus.ACTIVE,
-                    },
-                    topic: 'sku.events.v1',
-                    version: BigInt(1),
-                    actor_user_id: job.actor_user_id || null,
-                    traceparent: TraceContextStorage.getTraceparent() || null,
+                // Defer Outbox event for SKU until after product.created
+                pendingSkuEvents.push({
+                  _id: uuidv7(),
+                  event_id: uuidv7(),
+                  aggregate_type: AggregateType.SKU,
+                  aggregate_id: skuId,
+                  event_type: 'sku.created',
+                  schema_version: 1,
+                  payload: {
+                    sku_id: skuId,
+                    product_id: productId,
+                    shop_id: job.shop_id,
+                    seller_sku: sku.sellerSku,
+                    variant_key: sku.variantKey,
+                    status: SkuStatus.ACTIVE,
                   },
-                  session,
-                );
+                  topic: 'sku.events.v1',
+                  version: BigInt(1),
+                  actor_user_id: job.actor_user_id || null,
+                  traceparent: TraceContextStorage.getTraceparent() || null,
+                });
               }
 
+              // 4. Insert Media
               let shouldSetCover = true;
               if (spu.isExistingSpu) {
                 const existingMedia =
@@ -939,7 +934,28 @@ export class ImportWorkerService {
                 isFirst = false;
               }
 
-              // 5. Outbox event for Product (product.created CDC)
+              // 5. Update price_summary for existing SPU if new SKU has lower price
+              if (spu.isExistingSpu && spu.existingProduct) {
+                const currentBasePrice =
+                  spu.existingProduct.price_summary?.base_price != null
+                    ? BigInt(spu.existingProduct.price_summary.base_price)
+                    : null;
+                const newMinPrice = BigInt(minPrice);
+                if (currentBasePrice === null || newMinPrice < currentBasePrice) {
+                  await this.productRepo.update(
+                    { _id: productId },
+                    {
+                      $set: {
+                        'price_summary.base_price': newMinPrice,
+                        'price_summary.sale_price': newMinPrice,
+                      },
+                    },
+                    session,
+                  );
+                }
+              }
+
+              // 6. Outbox events: SPU (product.created) FIRST, then child SKUs (sku.created)
               if (!spu.isExistingSpu) {
                 await this.outboxRepo.saveEvent(
                   {
@@ -964,6 +980,10 @@ export class ImportWorkerService {
                   },
                   session,
                 );
+              }
+
+              for (const skuEvent of pendingSkuEvents) {
+                await this.outboxRepo.saveEvent(skuEvent, session);
               }
             }
           });
@@ -1175,15 +1195,15 @@ export class ImportWorkerService {
         }
       }
 
-      // Extract friendly [UUID/Code] from categoryId and productRefId
+      // Extract friendly [UUID/Code] from categoryId and productRefId (match last bracket group)
       let trimmedCatId = categoryId.trim();
-      const catMatch = trimmedCatId.match(/\[([A-Za-z0-9_-]+)\]/);
+      const catMatch = trimmedCatId.match(/\[([A-Za-z0-9_-]+)\](?=[^\]]*$)/);
       if (catMatch) {
         trimmedCatId = catMatch[1];
       }
 
       let trimmedProductRefId = productRefId.trim();
-      const refMatch = trimmedProductRefId.match(/\[([A-Za-z0-9_-]+)\]/);
+      const refMatch = trimmedProductRefId.match(/\[([A-Za-z0-9_-]+)\](?=[^\]]*$)/);
       if (refMatch) {
         trimmedProductRefId = refMatch[1];
       }

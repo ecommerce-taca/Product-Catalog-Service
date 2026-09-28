@@ -292,6 +292,11 @@ export class SellerImportController {
         err?.message?.includes('idx_import_jobs_active_shop_unique') ||
         err?.message?.includes('idx_import_jobs_shop_active_unique')
       ) {
+        try {
+          await this.storageService.deleteObjects([s3Key]);
+        } catch (cleanupErr: unknown) {
+          this.logger.warn(`Failed to cleanup s3 file on conflict: ${cleanupErr}`);
+        }
         throw new ConflictException({
           code: 'PRODUCT_IMPORT_JOB_RUNNING',
           message: 'Gian hàng đang có tiến trình nhập sản phẩm đang xử lý. Vui lòng chờ hoàn tất.',
@@ -339,6 +344,18 @@ export class SellerImportController {
       });
     }
 
+    const shopSnapshot = await this.shopSnapshotRepository.findByShopId(actorShopScope);
+    if (
+      shopSnapshot &&
+      (shopSnapshot.shop_status === ShopStatus.SUSPENDED ||
+        shopSnapshot.shop_status === ('SUSPENDED' as ShopStatus))
+    ) {
+      throw new ForbiddenException({
+        code: 'PRODUCT_SHOP_SUSPENDED',
+        message: 'Gian hàng đang bị tạm ngưng hoạt động (SUSPENDED).',
+      });
+    }
+
     if (!UUID_REGEX.test(jobId)) {
       throw new BadRequestException({
         code: 'PRODUCT_INVALID_INPUT',
@@ -346,7 +363,9 @@ export class SellerImportController {
       });
     }
 
-    const job = await this.importJobRepo.findById(jobId);
+    const job = this.importJobRepo.findByShopAndId
+      ? await this.importJobRepo.findByShopAndId(actorShopScope, jobId)
+      : await this.importJobRepo.findById(jobId);
     if (!job || job.shop_id !== actorShopScope) {
       throw new NotFoundException({
         code: 'PRODUCT_NOT_FOUND',
@@ -382,6 +401,18 @@ export class SellerImportController {
       });
     }
 
+    const shopSnapshot = await this.shopSnapshotRepository.findByShopId(actorShopScope);
+    if (
+      shopSnapshot &&
+      (shopSnapshot.shop_status === ShopStatus.SUSPENDED ||
+        shopSnapshot.shop_status === ('SUSPENDED' as ShopStatus))
+    ) {
+      throw new ForbiddenException({
+        code: 'PRODUCT_SHOP_SUSPENDED',
+        message: 'Gian hàng đang bị tạm ngưng hoạt động (SUSPENDED).',
+      });
+    }
+
     if (!UUID_REGEX.test(jobId)) {
       throw new BadRequestException({
         code: 'PRODUCT_INVALID_INPUT',
@@ -389,7 +420,9 @@ export class SellerImportController {
       });
     }
 
-    const job = await this.importJobRepo.findById(jobId);
+    const job = this.importJobRepo.findByShopAndId
+      ? await this.importJobRepo.findByShopAndId(actorShopScope, jobId)
+      : await this.importJobRepo.findById(jobId);
     if (!job || job.shop_id !== actorShopScope) {
       throw new NotFoundException({
         code: 'PRODUCT_NOT_FOUND',
@@ -447,6 +480,9 @@ export class SellerImportController {
         expires_at: expiresAt,
       };
 
+      const requestId =
+        TraceContextStorage.getRequestId() || (req?.headers?.['x-request-id'] as string) || '';
+
       res.status(HttpStatus.OK).json({
         job_id: resultDto.job_id,
         result_file_url: resultDto.result_file_url,
@@ -455,6 +491,10 @@ export class SellerImportController {
         error_count: resultDto.error_count,
         expires_at: resultDto.expires_at,
         data: resultDto,
+        meta: {
+          request_id: requestId,
+          as_of: new Date().toISOString(),
+        },
       });
       return;
     }

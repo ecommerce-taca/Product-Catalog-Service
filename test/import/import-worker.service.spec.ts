@@ -28,12 +28,14 @@ describe('ImportWorkerService', () => {
   const mockImportJobRepository = {
     findById: jest.fn(),
     update: jest.fn(),
+    updateHeartbeat: jest.fn().mockResolvedValue({}),
     create: jest.fn(),
   };
 
   const mockProductRepository = {
     create: jest.fn(),
     findById: jest.fn(),
+    update: jest.fn().mockResolvedValue({}),
   };
 
   const mockSkuRepository = {
@@ -203,6 +205,10 @@ describe('ImportWorkerService', () => {
 
   beforeEach(async () => {
     jest.clearAllMocks();
+    delete (mockProductRepository as any).findOne;
+    delete (mockCategoryRepository as any).findOne;
+    delete (mockProductRepository as any).findByIdOrCode;
+    delete (mockCategoryRepository as any).findByIdOrCode;
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -1469,16 +1475,104 @@ describe('ImportWorkerService', () => {
       )?.[0] as () => Promise<void>;
       expect(heartbeatFn).toBeDefined();
       await heartbeatFn();
-      expect(mockImportJobRepository.update).toHaveBeenCalledWith(
-        expect.objectContaining({ _id: testJobId, status: ImportJobStatus.PROCESSING }),
-        expect.objectContaining({ locked_until: expect.any(Date) }),
-      );
+      expect(mockImportJobRepository.updateHeartbeat).toHaveBeenCalledWith(testJobId, 120_000);
 
       // Verify clearInterval was called on completion
       expect(clearIntervalSpy).toHaveBeenCalled();
 
       setIntervalSpy.mockRestore();
       clearIntervalSpy.mockRestore();
+    });
+
+    it('should emit product.created outbox event before sku.created outbox events (Review 7 Finding 1)', async () => {
+      const buffer = await createWorkbookBuffer([
+        {
+          refId: 'SPU-ORD-01',
+          title: 'Sản phẩm kiểm tra Outbox sequence',
+          catId: testCategoryId,
+          sku: 'SKU-ORD-001',
+          price: 150000,
+          attributes: { 'Màu sắc': 'Đỏ' },
+        },
+      ]);
+      mockS3Download(buffer);
+
+      const mockJobDoc: any = {
+        _id: testJobId,
+        shop_id: testShopId,
+        status: ImportJobStatus.PENDING,
+        file_url: `imports/shop-${testShopId}/${testJobId}.xlsx`,
+        save: jest.fn().mockResolvedValue(true),
+        error_summary: [],
+      };
+      mockImportJobRepository.findById.mockResolvedValue(mockJobDoc);
+      mockProductRepository.findById.mockResolvedValue(null);
+      mockCategoryRepository.findById.mockResolvedValue({
+        _id: testCategoryId,
+        status: CategoryStatus.ACTIVE,
+      });
+      mockSkuRepository.findBySellerSkus.mockResolvedValue([]);
+
+      const savedEventTypes: string[] = [];
+      mockOutboxRepository.saveEvent.mockImplementation(async (event: any) => {
+        savedEventTypes.push(event.event_type);
+      });
+
+      await service.processJob(testJobId);
+
+      expect(savedEventTypes).toEqual(['product.created', 'sku.created']);
+    });
+
+    it('should update price_summary of existing SPU when imported SKU has lower price', async () => {
+      const existingProductId = '01912f20-0005-7000-8000-000000000005';
+      const buffer = await createWorkbookBuffer([
+        {
+          refId: existingProductId,
+          sku: 'SKU-LOW-PRICE-01',
+          price: 80000,
+          attributes: { 'Màu sắc': 'Vàng' },
+        },
+      ]);
+      mockS3Download(buffer);
+
+      const mockJobDoc: any = {
+        _id: testJobId,
+        shop_id: testShopId,
+        status: ImportJobStatus.PENDING,
+        file_url: `imports/shop-${testShopId}/${testJobId}.xlsx`,
+        save: jest.fn().mockResolvedValue(true),
+        error_summary: [],
+      };
+      mockImportJobRepository.findById.mockResolvedValue(mockJobDoc);
+      mockProductRepository.findById.mockResolvedValue({
+        _id: existingProductId,
+        shop_id: testShopId,
+        title: 'Áo thun có sẵn',
+        primary_category_id: testCategoryId,
+        status: ProductStatus.ACTIVE,
+        price_summary: {
+          base_price: BigInt(120000),
+          sale_price: BigInt(120000),
+        },
+      });
+      mockCategoryRepository.findById.mockResolvedValue({
+        _id: testCategoryId,
+        status: CategoryStatus.ACTIVE,
+      });
+      mockSkuRepository.findBySellerSkus.mockResolvedValue([]);
+
+      await service.processJob(testJobId);
+
+      expect(mockProductRepository.update).toHaveBeenCalledWith(
+        { _id: existingProductId },
+        expect.objectContaining({
+          $set: expect.objectContaining({
+            'price_summary.base_price': BigInt(80000),
+            'price_summary.sale_price': BigInt(80000),
+          }),
+        }),
+        expect.anything(),
+      );
     });
   });
 });

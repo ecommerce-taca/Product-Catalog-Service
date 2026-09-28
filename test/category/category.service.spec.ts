@@ -57,6 +57,8 @@ describe('CategoryService', () => {
       findDescendantsByPath: jest.fn(),
       updateSubtreePath: jest.fn(),
       findAllPaginated: jest.fn(),
+      findByIdOrCode: jest.fn(),
+      findByCodes: jest.fn(),
     };
 
     mockProductCategoryRepo = {

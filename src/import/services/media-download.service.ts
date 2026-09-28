@@ -55,7 +55,6 @@ export class MediaDownloadService {
         signal: controller.signal,
         redirect: 'manual',
       });
-      clearTimeout(timeoutId);
 
       if ((response.status >= 300 && response.status < 400) || response.type === 'opaqueredirect') {
         const err = new Error(
@@ -173,7 +172,6 @@ export class MediaDownloadService {
         sha256,
       };
     } catch (error: unknown) {
-      clearTimeout(timeoutId);
       const err = error as Error & { code?: string };
       if (err.name === 'AbortError') {
         const timeoutErr = new Error('Hết thời gian chờ tải hình ảnh (timeout 3s)');
@@ -184,6 +182,8 @@ export class MediaDownloadService {
         err.code = 'MEDIA_DOWNLOAD_FAILED';
       }
       throw err;
+    } finally {
+      clearTimeout(timeoutId);
     }
   }
 }

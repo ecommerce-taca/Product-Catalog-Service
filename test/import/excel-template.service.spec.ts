@@ -235,9 +235,13 @@ describe('ExcelTemplateService', () => {
       expect(sheetCat1?.getCell(2, 3).protection?.locked).not.toBe(false);
       expect(sheetCat1?.getCell(2, 1).protection?.locked).toBe(false);
       expect((sheetCat1 as SheetWithProtection)?.sheetProtection?.sheet).toBe(true);
+      expect(sheetCat1?.getColumn(8).numFmt).toBe('#,##0');
+      expect(sheetCat1?.getColumn(9).numFmt).toBe('#,##0');
 
       const expectedCat2Value = `${cat2.name} [${cat2._id}]`;
       expect(sheetCat2?.getCell(2, 3).value).toBe(expectedCat2Value);
+      expect(sheetCat2?.getColumn(8).numFmt).toBe('#,##0');
+      expect(sheetCat2?.getColumn(9).numFmt).toBe('#,##0');
     });
 
     it('should automatically default to MULTI_SHEET layout when multiple categories provided without specifying layout_mode', async () => {
@@ -524,6 +528,100 @@ describe('ExcelTemplateService', () => {
         `Áo Thun Basic [${productWithoutCode._id}]`,
       );
       expect(sheetWithoutCode?.getCell(2, 3).value).toBe(`Phụ Kiện [${catWithoutCode._id}]`);
+    });
+
+    it('should satisfy Wave 4: 100 preformatted rows with column 3 locked, input columns unlocked, spinCount=1, currency format #,##0, and short code guide column', async () => {
+      mockCategoryRepository.findById.mockResolvedValue(catWithCode);
+      mockCategoryRepository.findAllPaginated.mockResolvedValue({
+        items: [catWithCode, catWithoutCode],
+        total: 2,
+      });
+      const origAddWorksheet = ExcelJS.Workbook.prototype.addWorksheet;
+      const protectCalls: any[] = [];
+      const addWorksheetSpy = jest
+        .spyOn(ExcelJS.Workbook.prototype, 'addWorksheet')
+        .mockImplementation(function (this: ExcelJS.Workbook, ...args: any[]) {
+          const ws = origAddWorksheet.apply(this, args as any);
+          const origProtect = ws.protect.bind(ws);
+          ws.protect = jest.fn(async (password: string, options?: any) => {
+            protectCalls.push({ password, options });
+            return origProtect(password, options);
+          });
+          return ws;
+        });
+
+      const buffer = await service.generateTemplate({
+        category_ids: [catWithCode._id],
+        layout_mode: TemplateLayoutMode.SINGLE_SHEET,
+      });
+
+      addWorksheetSpy.mockRestore();
+
+      // Verify Worksheet.protect was called with spinCount: 1
+      expect(protectCalls.length).toBeGreaterThan(0);
+      expect(protectCalls[0].options).toEqual(
+        expect.objectContaining({
+          spinCount: 1,
+          selectLockedCells: true,
+          selectUnlockedCells: true,
+        }),
+      );
+
+      const workbook = new ExcelJS.Workbook();
+      interface ExcelReader {
+        load(data: unknown): Promise<ExcelJS.Workbook>;
+      }
+      await (workbook.xlsx as unknown as ExcelReader).load(buffer);
+
+      const sheet = workbook.getWorksheet('Sản phẩm & Biến thể');
+      expect(sheet).toBeDefined();
+
+      // 1. Short business code on column 3: Category with category_code displays 'Tên [CAT-1001]'
+      expect(sheet?.getCell(2, 3).value).toBe('Áo Thun Nam [CAT-1001]');
+
+      // 2. Default 100 preformatted rows (row 2 to 101)
+      expect(sheet?.getCell(2, 3).value).toBe('Áo Thun Nam [CAT-1001]');
+      expect(sheet?.getCell(101, 3).value).toBe('Áo Thun Nam [CAT-1001]');
+
+      // 3. Protection: column 3 locked = true, input columns unlocked = false
+      for (const rowNum of [2, 50, 101]) {
+        // Col 3 is locked
+        expect(sheet?.getCell(rowNum, 3).protection?.locked).not.toBe(false);
+        // Input columns are unlocked (col 1: ref_id, col 2: title, col 4: desc, col 7: sku, col 8: price, col 9: orig_price)
+        expect(sheet?.getCell(rowNum, 1).protection?.locked).toBe(false);
+        expect(sheet?.getCell(rowNum, 2).protection?.locked).toBe(false);
+        expect(sheet?.getCell(rowNum, 4).protection?.locked).toBe(false);
+        expect(sheet?.getCell(rowNum, 7).protection?.locked).toBe(false);
+        expect(sheet?.getCell(rowNum, 8).protection?.locked).toBe(false);
+        expect(sheet?.getCell(rowNum, 9).protection?.locked).toBe(false);
+      }
+      const sheetProt = (sheet as SheetWithProtection)?.sheetProtection;
+      expect(sheetProt?.sheet).toBe(true);
+
+      // 4. Currency format #,##0 on col 8 and 9
+      expect(sheet?.getColumn(8).numFmt).toBe('#,##0');
+      expect(sheet?.getColumn(9).numFmt).toBe('#,##0');
+
+      // 5. Guidance sheet has "Mã Danh Mục Ngắn (category_code)"
+      const sheetGuide = workbook.getWorksheet('Hướng dẫn & Danh mục');
+      expect(sheetGuide).toBeDefined();
+      expect(sheetGuide?.getRow(1).getCell(3).value).toBe('Mã Danh Mục Ngắn (category_code)');
+
+      // Verify category listing in guide sheet
+      let catWithCodeRow: ExcelJS.Row | undefined;
+      let catWithoutCodeRow: ExcelJS.Row | undefined;
+      sheetGuide?.eachRow((row) => {
+        if (row.getCell(1).value === 'Áo Thun Nam [CAT-1001]') {
+          catWithCodeRow = row;
+        }
+        if (row.getCell(1).value === `Phụ Kiện [${catWithoutCode._id}]`) {
+          catWithoutCodeRow = row;
+        }
+      });
+      expect(catWithCodeRow).toBeDefined();
+      expect(catWithCodeRow?.getCell(3).value).toBe('CAT-1001');
+      expect(catWithoutCodeRow).toBeDefined();
+      expect(catWithoutCodeRow?.getCell(3).value).toBe('---');
     });
   });
 

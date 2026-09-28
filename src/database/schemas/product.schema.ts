@@ -171,7 +171,11 @@ ProductSchema.index(
 
 ProductSchema.index(
   { shop_id: 1, product_code: 1 },
-  { unique: true, sparse: true, name: 'idx_products_shop_product_code_unique_sparse' },
+  {
+    unique: true,
+    partialFilterExpression: { product_code: { $type: 'string' } },
+    name: 'idx_products_shop_product_code_unique_partial',
+  },
 );
 
 ProductSchema.index({ shop_id: 1, status: 1 }, { name: 'idx_products_shop_status' });

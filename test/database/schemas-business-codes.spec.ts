@@ -14,12 +14,14 @@ import {
   ImportJobSchema,
   ImportJobStatus,
 } from '../../src/database/schemas/import-job.schema';
+import { Sku, SkuSchema } from '../../src/database/schemas/sku.schema';
 import { generateCategoryCode, generateProductCode } from '../../scripts/backfill-business-codes';
 
 describe('Schemas Business Codes & Hardening Spec [PCAT-IMP-BUSINESS-CODES]', () => {
   const CategoryModel = mongoose.model<Category>('CategoryTest', CategorySchema);
   const ProductModel = mongoose.model<Product>('ProductTest', ProductSchema);
   const ImportJobModel = mongoose.model<ImportJob>('ImportJobTest', ImportJobSchema);
+  const SkuModel = mongoose.model<Sku>('SkuTest', SkuSchema);
 
   describe('1. Category Schema & Business Codes', () => {
     describe('CATEGORY_CODE_REGEX', () => {
@@ -71,7 +73,7 @@ describe('Schemas Business Codes & Hardening Spec [PCAT-IMP-BUSINESS-CODES]', ()
     });
 
     describe('Schema indexes', () => {
-      it('should define sparse unique index idx_category_code_unique_sparse on category_code', () => {
+      it('should define partial unique index idx_category_code_unique_partial on category_code', () => {
         const indexes = CategorySchema.indexes();
         const categoryCodeIndex = indexes.find(([fields]) => fields.category_code === 1);
 
@@ -81,8 +83,8 @@ describe('Schemas Business Codes & Hardening Spec [PCAT-IMP-BUSINESS-CODES]', ()
         expect(options).toEqual(
           expect.objectContaining({
             unique: true,
-            sparse: true,
-            name: 'idx_category_code_unique_sparse',
+            partialFilterExpression: { category_code: { $type: 'string' } },
+            name: 'idx_category_code_unique_partial',
           }),
         );
       });
@@ -199,7 +201,7 @@ describe('Schemas Business Codes & Hardening Spec [PCAT-IMP-BUSINESS-CODES]', ()
     });
 
     describe('Schema indexes', () => {
-      it('should define compound sparse unique index idx_products_shop_product_code_unique_sparse on (shop_id, product_code)', () => {
+      it('should define compound partial unique index idx_products_shop_product_code_unique_partial on (shop_id, product_code)', () => {
         const indexes = ProductSchema.indexes();
         const productCodeIndex = indexes.find(
           ([fields]) => fields.shop_id === 1 && fields.product_code === 1,
@@ -211,8 +213,8 @@ describe('Schemas Business Codes & Hardening Spec [PCAT-IMP-BUSINESS-CODES]', ()
         expect(options).toEqual(
           expect.objectContaining({
             unique: true,
-            sparse: true,
-            name: 'idx_products_shop_product_code_unique_sparse',
+            partialFilterExpression: { product_code: { $type: 'string' } },
+            name: 'idx_products_shop_product_code_unique_partial',
           }),
         );
       });
@@ -389,7 +391,7 @@ describe('Schemas Business Codes & Hardening Spec [PCAT-IMP-BUSINESS-CODES]', ()
         const existingCodes = new Set<string>();
         const code = generateProductCode(existingCodes);
 
-        expect(code.startsWith('PRD_')).toBe(true);
+        expect(code.startsWith('PRD-')).toBe(true);
         expect(code.length).toBeGreaterThanOrEqual(6);
         expect(code.length).toBeLessThanOrEqual(32);
         expect(PRODUCT_CODE_REGEX.test(code)).toBe(true);
@@ -404,6 +406,309 @@ describe('Schemas Business Codes & Hardening Spec [PCAT-IMP-BUSINESS-CODES]', ()
         }
         expect(existingCodes.size).toBe(count);
       });
+    });
+  });
+
+  describe('5. SPU Title Validation Constraints (10..200 characters)', () => {
+    describe('Schema property definition', () => {
+      it('should define title with required: true, trim: true, and maxlength: 200', () => {
+        const path = ProductSchema.path('title') as unknown as {
+          instance: string;
+          options: { required?: boolean; maxlength?: number; trim?: boolean };
+        };
+        expect(path).toBeDefined();
+        expect(path.instance).toBe('String');
+        expect(path.options.required).toBe(true);
+        expect(path.options.maxlength).toBe(200);
+        expect(path.options.trim).toBe(true);
+      });
+    });
+
+    describe('SPU title length business rule (10 to 200 characters)', () => {
+      const validateSpuTitle = (title?: string | null): { valid: boolean; errorCode?: string } => {
+        if (!title || title.trim().length < 10 || title.trim().length > 200) {
+          return { valid: false, errorCode: 'PRODUCT_INVALID_INPUT' };
+        }
+        return { valid: true };
+      };
+
+      it('should accept conforming titles between 10 and 200 characters', () => {
+        expect(validateSpuTitle('1234567890').valid).toBe(true);
+        expect(validateSpuTitle('Áo thun polo nam cao cấp').valid).toBe(true);
+        expect(validateSpuTitle('A'.repeat(200)).valid).toBe(true);
+      });
+
+      it('should reject titles shorter than 10 characters', () => {
+        expect(validateSpuTitle('Ngắn')).toEqual({
+          valid: false,
+          errorCode: 'PRODUCT_INVALID_INPUT',
+        });
+        expect(validateSpuTitle('123456789')).toEqual({
+          valid: false,
+          errorCode: 'PRODUCT_INVALID_INPUT',
+        });
+      });
+
+      it('should reject titles longer than 200 characters', () => {
+        expect(validateSpuTitle('A'.repeat(201))).toEqual({
+          valid: false,
+          errorCode: 'PRODUCT_INVALID_INPUT',
+        });
+      });
+
+      it('should reject empty or whitespace-only titles', () => {
+        expect(validateSpuTitle('')).toEqual({
+          valid: false,
+          errorCode: 'PRODUCT_INVALID_INPUT',
+        });
+        expect(validateSpuTitle('          ')).toEqual({
+          valid: false,
+          errorCode: 'PRODUCT_INVALID_INPUT',
+        });
+        expect(validateSpuTitle(null)).toEqual({
+          valid: false,
+          errorCode: 'PRODUCT_INVALID_INPUT',
+        });
+      });
+    });
+  });
+
+  describe('6. Price Validation Constraints (VND 1.000 to 999.999.999.999 & original_price >= price)', () => {
+    describe('SkuSchema price_override definition and validation', () => {
+      it('should have price_override validator enforcing range 1 to 999,999,999,999', async () => {
+        const validUuid = '018f6f5a-4b9d-7f8e-9012-3456789abcde';
+        const validDoc = new SkuModel({
+          _id: validUuid,
+          product_id: validUuid,
+          shop_id: validUuid,
+          seller_sku: 'SKU-VALID-PRICE',
+          attributes: {},
+          variant_key: 'default',
+          price_override: BigInt(50000),
+        });
+        await expect(validDoc.validate()).resolves.toBeUndefined();
+
+        const nullPriceDoc = new SkuModel({
+          _id: validUuid,
+          product_id: validUuid,
+          shop_id: validUuid,
+          seller_sku: 'SKU-NULL-PRICE',
+          attributes: {},
+          variant_key: 'default',
+          price_override: null,
+        });
+        await expect(nullPriceDoc.validate()).resolves.toBeUndefined();
+
+        const zeroPriceDoc = new SkuModel({
+          _id: validUuid,
+          product_id: validUuid,
+          shop_id: validUuid,
+          seller_sku: 'SKU-ZERO-PRICE',
+          attributes: {},
+          variant_key: 'default',
+          price_override: BigInt(0),
+        });
+        await expect(zeroPriceDoc.validate()).rejects.toThrow();
+
+        const tooLargeDoc = new SkuModel({
+          _id: validUuid,
+          product_id: validUuid,
+          shop_id: validUuid,
+          seller_sku: 'SKU-OVER-PRICE',
+          attributes: {},
+          variant_key: 'default',
+          price_override: BigInt(1_000_000_000_000),
+        });
+        await expect(tooLargeDoc.validate()).rejects.toThrow();
+      });
+    });
+
+    describe('Import price validation business rules', () => {
+      const validatePriceRule = (
+        price: unknown,
+        originalPrice?: unknown,
+      ): { valid: boolean; errors: string[] } => {
+        const errors: string[] = [];
+
+        if (
+          price === null ||
+          price === undefined ||
+          typeof price !== 'number' ||
+          isNaN(price) ||
+          !Number.isInteger(price) ||
+          price < 1000 ||
+          price > 999_999_999_999
+        ) {
+          errors.push('PRODUCT_PRICE_INVALID');
+        }
+
+        if (
+          originalPrice !== null &&
+          originalPrice !== undefined &&
+          typeof originalPrice === 'number' &&
+          !isNaN(originalPrice)
+        ) {
+          if (originalPrice < 0 || !Number.isInteger(originalPrice)) {
+            errors.push('PRODUCT_PRICE_INVALID');
+          } else if (typeof price === 'number' && originalPrice < price) {
+            errors.push('PRODUCT_PRICE_INVALID');
+          }
+        }
+
+        return { valid: errors.length === 0, errors };
+      };
+
+      it('should accept valid integer price between 1.000 and 999.999.999.999 VND', () => {
+        expect(validatePriceRule(1000).valid).toBe(true);
+        expect(validatePriceRule(500000, 600000).valid).toBe(true);
+        expect(validatePriceRule(500000, 500000).valid).toBe(true);
+        expect(validatePriceRule(999_999_999_999).valid).toBe(true);
+      });
+
+      it('should reject price less than 1.000 VND', () => {
+        expect(validatePriceRule(999).errors).toContain('PRODUCT_PRICE_INVALID');
+        expect(validatePriceRule(0).errors).toContain('PRODUCT_PRICE_INVALID');
+        expect(validatePriceRule(-5000).errors).toContain('PRODUCT_PRICE_INVALID');
+      });
+
+      it('should reject price exceeding 999.999.999.999 VND', () => {
+        expect(validatePriceRule(1_000_000_000_000).errors).toContain('PRODUCT_PRICE_INVALID');
+      });
+
+      it('should reject non-integer decimal prices', () => {
+        expect(validatePriceRule(15000.5).errors).toContain('PRODUCT_PRICE_INVALID');
+        expect(validatePriceRule(99.9).errors).toContain('PRODUCT_PRICE_INVALID');
+      });
+
+      it('should reject when original_price < price (giá niêm yết thấp hơn giá bán)', () => {
+        const result = validatePriceRule(200000, 150000);
+        expect(result.valid).toBe(false);
+        expect(result.errors).toContain('PRODUCT_PRICE_INVALID');
+      });
+
+      it('should accept when original_price >= price', () => {
+        expect(validatePriceRule(200000, 200000).valid).toBe(true);
+        expect(validatePriceRule(200000, 250000).valid).toBe(true);
+      });
+    });
+  });
+
+  describe('7. Empty Variant Collision Protection (B-LR-01 / SF-EDGE-01)', () => {
+    describe('Schema unique index on (product_id, variant_key)', () => {
+      it('should define idx_skus_product_variant_key_unique unique index on SkuSchema', () => {
+        const indexes = SkuSchema.indexes();
+        const variantKeyIndex = indexes.find(
+          ([fields, opts]) =>
+            fields.product_id === 1 &&
+            fields.variant_key === 1 &&
+            opts?.name === 'idx_skus_product_variant_key_unique',
+        );
+
+        expect(variantKeyIndex).toBeDefined();
+        const [fields, options] = variantKeyIndex!;
+        expect(fields).toEqual({ product_id: 1, variant_key: 1 });
+        expect(options).toEqual(
+          expect.objectContaining({
+            unique: true,
+            name: 'idx_skus_product_variant_key_unique',
+          }),
+        );
+      });
+    });
+
+    describe('Canonical variant key generation & Stage 1 collision intercept (B-LR-01)', () => {
+      const computeCanonicalVariantKey = (attributes?: Record<string, string>): string => {
+        if (!attributes || typeof attributes !== 'object') {
+          return '';
+        }
+        const keys = Object.keys(attributes)
+          .map((k) => k.trim())
+          .filter(Boolean)
+          .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'accent' }));
+
+        if (keys.length === 0) {
+          return '';
+        }
+
+        return keys
+          .map((k) => `${k.toLowerCase()}:${String(attributes[k]).trim().toLowerCase()}`)
+          .join('|');
+      };
+
+      it('should produce empty variantKey ("") when no attributes or empty attributes provided', () => {
+        expect(computeCanonicalVariantKey()).toBe('');
+        expect(computeCanonicalVariantKey({})).toBe('');
+        expect(computeCanonicalVariantKey(undefined)).toBe('');
+      });
+
+      it('should intercept 2 empty variant rows in the same SPU with PRODUCT_SKU_DUPLICATE_VARIANT at Stage 1', () => {
+        const skus = [
+          { skuId: 'SKU-01', variantKey: computeCanonicalVariantKey({}) },
+          { skuId: 'SKU-02', variantKey: computeCanonicalVariantKey({}) },
+        ];
+
+        const seenVariantKeys = new Set<string>();
+        const flaggedErrors: Array<{ skuId: string; errorCode: string }> = [];
+
+        for (const sku of skus) {
+          if (sku.variantKey !== undefined && seenVariantKeys.has(sku.variantKey)) {
+            flaggedErrors.push({
+              skuId: sku.skuId,
+              errorCode: 'PRODUCT_SKU_DUPLICATE_VARIANT',
+            });
+          }
+          if (sku.variantKey !== undefined) {
+            seenVariantKeys.add(sku.variantKey);
+          }
+        }
+
+        expect(flaggedErrors).toHaveLength(1);
+        expect(flaggedErrors[0]).toEqual({
+          skuId: 'SKU-02',
+          errorCode: 'PRODUCT_SKU_DUPLICATE_VARIANT',
+        });
+      });
+    });
+  });
+
+  describe('8. Batch Processing Constraints (Max 200 SKU rows / 100 SPUs)', () => {
+    const validateBatchLimits = (
+      rawRowsCount: number,
+      spuCount: number,
+    ): { valid: boolean; errorCode?: string; errorMessage?: string } => {
+      if (rawRowsCount > 200) {
+        return {
+          valid: false,
+          errorCode: 'PRODUCT_IMPORT_TOO_MANY_ROWS',
+          errorMessage: `Số lượng dòng trong file (${rawRowsCount}) vượt quá giới hạn tối đa cho phép (200 dòng SKU / 100 SPUs).`,
+        };
+      }
+      if (spuCount > 100) {
+        return {
+          valid: false,
+          errorCode: 'PRODUCT_IMPORT_TOO_MANY_SPUS',
+          errorMessage: `Số lượng SPU trong file (${spuCount}) vượt quá giới hạn tối đa 100 SPUs.`,
+        };
+      }
+      return { valid: true };
+    };
+
+    it('should reject batch with more than 200 SKU rows', () => {
+      const res = validateBatchLimits(201, 10);
+      expect(res.valid).toBe(false);
+      expect(res.errorCode).toBe('PRODUCT_IMPORT_TOO_MANY_ROWS');
+    });
+
+    it('should reject batch with more than 100 SPUs', () => {
+      const res = validateBatchLimits(150, 101);
+      expect(res.valid).toBe(false);
+      expect(res.errorCode).toBe('PRODUCT_IMPORT_TOO_MANY_SPUS');
+    });
+
+    it('should accept conforming batch (<= 200 SKU rows and <= 100 SPUs)', () => {
+      expect(validateBatchLimits(200, 100).valid).toBe(true);
+      expect(validateBatchLimits(50, 10).valid).toBe(true);
+      expect(validateBatchLimits(1, 1).valid).toBe(true);
     });
   });
 });

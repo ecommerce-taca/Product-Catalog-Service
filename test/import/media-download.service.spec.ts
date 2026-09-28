@@ -83,6 +83,44 @@ describe('MediaDownloadService (SF-1 Anti-SSRF Redirect Protection)', () => {
     ).rejects.toMatchObject({
       code: 'MEDIA_INVALID_URL_BLOCKED',
     });
+
+    // IPv4-mapped IPv6 & CGNAT (SEC-BLK-02)
+    await expect(
+      service.downloadAndUploadImage('http://[::ffff:127.0.0.1]/secret.png', 'prod-123'),
+    ).rejects.toMatchObject({
+      code: 'MEDIA_INVALID_URL_BLOCKED',
+    });
+
+    await expect(
+      service.downloadAndUploadImage('http://[::ffff:172.16.0.1]/secret.png', 'prod-123'),
+    ).rejects.toMatchObject({
+      code: 'MEDIA_INVALID_URL_BLOCKED',
+    });
+
+    await expect(
+      service.downloadAndUploadImage('http://[::ffff:100.64.0.1]/secret.png', 'prod-123'),
+    ).rejects.toMatchObject({
+      code: 'MEDIA_INVALID_URL_BLOCKED',
+    });
+
+    await expect(
+      service.downloadAndUploadImage('http://100.64.1.1/secret.png', 'prod-123'),
+    ).rejects.toMatchObject({
+      code: 'MEDIA_INVALID_URL_BLOCKED',
+    });
+  });
+
+  it('should catch AbortError and throw timeout MEDIA_DOWNLOAD_FAILED (SEC-BLK-01 Slowloris DoS)', async () => {
+    const abortErr = new Error('The operation was aborted');
+    abortErr.name = 'AbortError';
+    global.fetch = jest.fn().mockRejectedValue(abortErr);
+
+    await expect(
+      service.downloadAndUploadImage('https://example.com/slowloris.jpg', 'prod-123'),
+    ).rejects.toMatchObject({
+      code: 'MEDIA_DOWNLOAD_FAILED',
+      message: 'Hết thời gian chờ tải hình ảnh (timeout 3s)',
+    });
   });
 
   describe('B-SEC-01 Unbounded Buffer DoS Protection & Streaming', () => {

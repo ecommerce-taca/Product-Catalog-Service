@@ -166,8 +166,16 @@ describe('MongoImportJobRepository', () => {
 
       expect(mockModel.updateMany).toHaveBeenCalledWith(
         {
-          status: ImportJobStatus.PROCESSING,
-          locked_until: { $lte: fixedNow },
+          $or: [
+            {
+              status: ImportJobStatus.PROCESSING,
+              locked_until: { $lte: fixedNow },
+            },
+            {
+              status: ImportJobStatus.PENDING,
+              created_at: { $lte: expect.any(Date) },
+            },
+          ],
         },
         expect.objectContaining({
           $set: {
@@ -179,7 +187,7 @@ describe('MongoImportJobRepository', () => {
               row_index: 0,
               product_ref_id: 'SYSTEM',
               error_code: 'PRODUCT_IMPORT_WORKER_TIMEOUT',
-              error_message: 'Tiến trình xử lý bị quá hạn (worker heartbeat timeout)',
+              error_message: expect.stringContaining('quá hạn'),
             },
           },
         }),
