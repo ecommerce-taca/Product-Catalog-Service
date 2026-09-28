@@ -119,7 +119,10 @@ export class ExcelResultService {
 
     // Group errors by sheet_name:row_index and fallback row_index
     const sheetErrorMap = new Map<string, Array<{ errorCode: string; errorMessage: string }>>();
-    const fallbackRowErrorMap = new Map<number, Array<{ errorCode: string; errorMessage: string }>>();
+    const fallbackRowErrorMap = new Map<
+      number,
+      Array<{ errorCode: string; errorMessage: string }>
+    >();
 
     if (job.error_summary && job.error_summary.length > 0) {
       for (const err of job.error_summary) {
@@ -289,10 +292,7 @@ export class ExcelResultService {
     const priceVal = getCellVal('price');
 
     return (
-      titleVal.length === 0 &&
-      skuVal.length === 0 &&
-      refIdVal.length === 0 &&
-      priceVal.length === 0
+      titleVal.length === 0 && skuVal.length === 0 && refIdVal.length === 0 && priceVal.length === 0
     );
   }
 
