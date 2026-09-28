@@ -30,6 +30,7 @@ describe('SellerImportController - Tracking & Result Export (FR-IM-06)', () => {
 
   const mockExcelTemplateService = {
     generateTemplate: jest.fn(),
+    getOrInitTemplate: jest.fn(),
   };
 
   const mockShopSnapshotRepository = {

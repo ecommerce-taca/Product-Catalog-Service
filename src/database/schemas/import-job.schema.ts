@@ -11,6 +11,9 @@ export enum ImportJobStatus {
 
 @Schema({ _id: false })
 export class ImportErrorDetail {
+  @Prop({ type: String, default: null })
+  sheet_name?: string;
+
   @Prop({ type: Number, required: true })
   row_index: number;
 

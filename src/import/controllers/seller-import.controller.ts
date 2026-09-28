@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  Body,
   ConflictException,
   Controller,
   ForbiddenException,
@@ -22,6 +23,8 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { Request, Response } from 'express';
 import { v7 as uuidv7 } from 'uuid';
 
+import { GenerateCustomTemplateDto } from '../dto/generate-custom-template.dto';
+
 import { Roles } from '../../common/decorators/roles.decorator';
 import { ShopScope } from '../../common/decorators/shop-scope.decorator';
 import { Actor } from '../../common/decorators/actor.decorator';
@@ -34,12 +37,12 @@ import {
   ShopSnapshotRepositoryPort,
 } from '../../projections/repositories/shop-snapshot.repository.interface';
 import { S3StorageService } from '../../integrations/storage/s3-storage.service';
+import { TraceContextStorage } from '../../common/context/trace-context.storage';
 
 import { ImportJobRepositoryPort } from '../repositories/import-job.repository.interface';
 import { ExcelTemplateService } from '../services/excel-template.service';
 import { ImportWorkerService } from '../services/import-worker.service';
 import { ExcelResultService } from '../services/excel-result.service';
-import { ImportTemplateQueryDto } from '../dto/import-template-query.dto';
 import {
   ImportJobCreatedResponseDto,
   ImportJobResponseDto,
@@ -76,17 +79,55 @@ export class SellerImportController {
   ) {}
 
   /**
-   * Downloads an Excel template (.xlsx) for bulk product import.
-   * If category_id is provided, dynamic attributes with dropdown validation are attached.
+   * Generates or retrieves an Excel template (.xlsx) for bulk product import (FR-IM-01).
+   * Supports custom row count, layout mode, category filter, and product pre-population.
+   * By default, returns a JSON envelope containing the Presigned Download URL.
+   * If client explicitly requests binary stream (via Accept header), streams the file.
    * Enforces shop status check: SUSPENDED shops are rejected with 403 PRODUCT_SHOP_SUSPENDED (BR-IM-01).
    */
-  @Get('template')
+  /**
+   * Generates an Excel template (.xlsx) for bulk product import (FR-IM-01) with custom filters.
+   * By default, returns a JSON envelope containing the Presigned Download URL.
+   * If client explicitly requests binary stream (via Accept header), streams the file.
+   * Enforces shop status check: SUSPENDED shops are rejected with 403 PRODUCT_SHOP_SUSPENDED (BR-IM-01).
+   */
+  @Post('template')
   @SkipEnvelope()
   async downloadTemplate(
-    @Query() query: ImportTemplateQueryDto,
+    @Body() dto: GenerateCustomTemplateDto,
     @ShopScope() shopScope: string,
     @Actor() actor: ActorContext,
     @Res() res: Response,
+    @Req() req?: Request,
+  ): Promise<void> {
+    return this.handleTemplateDownload(dto, shopScope, actor, res, req);
+  }
+
+  /**
+   * Backward-compatible GET endpoint for template download.
+   */
+  @Get('template')
+  @SkipEnvelope()
+  async downloadTemplateLegacy(
+    @Query('category_id') categoryId: string,
+    @ShopScope() shopScope: string,
+    @Actor() actor: ActorContext,
+    @Res() res: Response,
+    @Req() req?: Request,
+  ): Promise<void> {
+    const dto = new GenerateCustomTemplateDto();
+    if (categoryId) {
+      dto.category_ids = [categoryId];
+    }
+    return this.handleTemplateDownload(dto, shopScope, actor, res, req);
+  }
+
+  private async handleTemplateDownload(
+    dto: GenerateCustomTemplateDto = {},
+    shopScope: string,
+    actor: ActorContext,
+    res: Response,
+    req?: Request,
   ): Promise<void> {
     const actorShopScope = shopScope || actor?.shopScope;
     if (!actorShopScope) {
@@ -108,16 +149,39 @@ export class SellerImportController {
       });
     }
 
-    const buffer = await this.excelTemplateService.generateTemplate(query.category_id);
-    const filename = `product_import_template_${query.category_id || 'default'}.xlsx`;
+    const templateResult = await this.excelTemplateService.getOrInitTemplate(dto, actorShopScope);
 
-    res.set({
-      'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-      'Content-Disposition': `attachment; filename="${filename}"`,
-      'Content-Length': buffer.length.toString(),
+    const acceptHeader = (req?.headers?.accept || '').toLowerCase();
+    const wantsBinary =
+      acceptHeader.includes('application/vnd.openxmlformats-officedocument.spreadsheetml.sheet') ||
+      acceptHeader.includes('application/octet-stream');
+
+    if (wantsBinary) {
+      const buffer = await this.excelTemplateService.generateTemplate(dto, actorShopScope);
+      res.set({
+        'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'Content-Disposition': `attachment; filename="${templateResult.filename}"`,
+        'Content-Length': buffer.length.toString(),
+      });
+      res.status(HttpStatus.OK).send(buffer);
+      return;
+    }
+
+    const resultData = {
+      download_url: templateResult.downloadUrl,
+      filename: templateResult.filename,
+      expires_at: templateResult.expiresAt,
+    };
+
+    const requestId =
+      TraceContextStorage.getRequestId() || (req?.headers?.['x-request-id'] as string) || '';
+    res.status(HttpStatus.OK).json({
+      data: resultData,
+      meta: {
+        request_id: requestId,
+        as_of: new Date().toISOString(),
+      },
     });
-
-    res.status(HttpStatus.OK).send(buffer);
   }
 
   /**
@@ -128,7 +192,7 @@ export class SellerImportController {
    */
   @Post()
   @HttpCode(HttpStatus.ACCEPTED)
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: MAX_FILE_SIZE_BYTES } }))
   async uploadImportFile(
     @UploadedFile() file: UploadedFilePayload,
     @ShopScope() shopScope: string,

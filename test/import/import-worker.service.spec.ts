@@ -33,6 +33,7 @@ describe('ImportWorkerService', () => {
 
   const mockProductRepository = {
     create: jest.fn(),
+    findById: jest.fn(),
   };
 
   const mockSkuRepository = {
@@ -129,6 +130,61 @@ describe('ImportWorkerService', () => {
       ]);
     }
 
+    const arrayBuf = await wb.xlsx.writeBuffer();
+    return Buffer.from(arrayBuf);
+  }
+
+  async function createMultiSheetWorkbookBuffer(
+    sheets: Array<{
+      sheetName: string;
+      rows: Array<{
+        refId: string;
+        title?: string;
+        catId?: string;
+        desc?: string;
+        sku: string;
+        price: number;
+        origPrice?: number;
+        urls?: string;
+        attributes?: Record<string, string>;
+      }>;
+    }>,
+  ): Promise<Buffer> {
+    const wb = new ExcelJS.Workbook();
+    for (const s of sheets) {
+      const ws = wb.addWorksheet(s.sheetName);
+      const headers = [
+        'Mã tham chiếu sản phẩm (*)',
+        'Tên sản phẩm (*)',
+        'Mã danh mục (*)',
+        'Mô tả sản phẩm (*)',
+        'Thương hiệu',
+        'Danh sách URL ảnh (cách nhau dấu phẩy)',
+        'Mã SKU người bán (*)',
+        'Giá bán VND (*)',
+        'Giá niêm yết gốc VND',
+        'Mã vạch',
+        'Màu sắc',
+        'Kích cỡ',
+      ];
+      ws.addRow(headers);
+      for (const r of s.rows) {
+        ws.addRow([
+          r.refId,
+          r.title ?? '',
+          r.catId ?? '',
+          r.desc ?? '',
+          'TacaBrand',
+          r.urls ?? '',
+          r.sku,
+          r.price,
+          r.origPrice ?? '',
+          '8931234567890',
+          r.attributes?.['Màu sắc'] ?? '',
+          r.attributes?.['Kích cỡ'] ?? '',
+        ]);
+      }
+    }
     const arrayBuf = await wb.xlsx.writeBuffer();
     return Buffer.from(arrayBuf);
   }
@@ -281,9 +337,18 @@ describe('ImportWorkerService', () => {
         expect.anything(),
       );
 
-      // Verify Category and Media created
+      // Verify Stage 3 sequential order (PCAT-IMP-07): SPU -> Category -> SKU -> Media
       expect(mockProductCategoryRepository.create).toHaveBeenCalledTimes(1);
       expect(mockProductMediaRepository.create).toHaveBeenCalledTimes(1);
+
+      const productCallOrder = mockProductRepository.create.mock.invocationCallOrder[0];
+      const categoryCallOrder = mockProductCategoryRepository.create.mock.invocationCallOrder[0];
+      const skuCallOrder = mockSkuRepository.create.mock.invocationCallOrder[0];
+      const mediaCallOrder = mockProductMediaRepository.create.mock.invocationCallOrder[0];
+
+      expect(productCallOrder).toBeLessThan(categoryCallOrder);
+      expect(categoryCallOrder).toBeLessThan(skuCallOrder);
+      expect(skuCallOrder).toBeLessThan(mediaCallOrder);
 
       // Verify Outbox events recorded (1 product.created + 2 sku.created)
       expect(mockOutboxRepository.saveEvent).toHaveBeenCalledTimes(3);
@@ -668,6 +733,322 @@ describe('ImportWorkerService', () => {
   describe('Concurrency Semaphore (GLOBAL_MAX_CONCURRENT_WORKERS = 3)', () => {
     it('should limit active workers to a maximum of 3 concurrent jobs', async () => {
       expect(service.getActiveWorkersCount()).toBe(0);
+    });
+  });
+
+  describe('Multi-sheet, Friendly IDs & Existing SPU Support', () => {
+    it('should parse multiple data sheets, skip guide and example sheets, and import all SPUs', async () => {
+      const buffer = await createMultiSheetWorkbookBuffer([
+        {
+          sheetName: 'Áo Sơ Mi Nam',
+          rows: [
+            {
+              refId: 'REF-AO-01',
+              title: 'Áo Sơ Mi Nam Dài Tay Công Sở',
+              catId: testCategoryId,
+              sku: 'AO-TRANG-39',
+              price: 250000,
+            },
+            {
+              refId: 'REF-AO-01',
+              sku: 'AO-TRANG-40',
+              price: 250000,
+            },
+          ],
+        },
+        {
+          sheetName: 'Giày Tây Nam',
+          rows: [
+            {
+              refId: 'REF-GIAY-01',
+              title: 'Giày Tây Da Bò Oxford Cao Cấp',
+              catId: testCategoryId,
+              sku: 'GIAY-DEN-41',
+              price: 750000,
+            },
+          ],
+        },
+        {
+          sheetName: 'Hướng dẫn & Danh mục',
+          rows: [],
+        },
+        {
+          sheetName: 'Ví dụ điền mẫu',
+          rows: [
+            {
+              refId: 'SAMPLE-EXAMPLE',
+              title: 'Mẫu tham khảo không được import',
+              catId: testCategoryId,
+              sku: 'SAMPLE-SKU-99',
+              price: 100000,
+            },
+          ],
+        },
+      ]);
+      mockS3Download(buffer);
+
+      const mockJobDoc: any = {
+        _id: testJobId,
+        shop_id: testShopId,
+        status: ImportJobStatus.PENDING,
+        file_url: `imports/shop-${testShopId}/${testJobId}.xlsx`,
+        save: jest.fn().mockResolvedValue(true),
+        error_summary: [],
+      };
+      mockImportJobRepository.findById.mockResolvedValue(mockJobDoc);
+      mockProductRepository.findById.mockResolvedValue(null);
+      mockCategoryRepository.findById.mockResolvedValue({
+        _id: testCategoryId,
+        status: CategoryStatus.ACTIVE,
+      });
+      mockSkuRepository.findBySellerSkus.mockResolvedValue([]);
+
+      await service.processJob(testJobId);
+
+      expect(mockJobDoc.status).toBe(ImportJobStatus.COMPLETED);
+      expect(mockJobDoc.total_rows).toBe(3); // 2 rows from Áo Sơ Mi + 1 from Giày Tây (Ví dụ & Hướng dẫn skipped)
+      expect(mockJobDoc.success_count).toBe(2); // 2 SPUs created
+      expect(mockJobDoc.error_count).toBe(0);
+      expect(mockProductRepository.create).toHaveBeenCalledTimes(2);
+      expect(mockSkuRepository.create).toHaveBeenCalledTimes(3);
+    });
+
+    it('should extract UUID from friendly category format [UUID] and friendly productRefId [UUID]', async () => {
+      const buffer = await createWorkbookBuffer([
+        {
+          refId: 'Áo Thun Nam Cao Cấp [01912f30-0000-7000-8000-000000000001]',
+          title: 'Áo Thun Nam Cotton 100% Co Giãn 4 Chiều',
+          catId: `Thời Trang Nam [${testCategoryId}]`,
+          sku: 'AT-NAM-DEN-XL',
+          price: 180000,
+        },
+      ]);
+      mockS3Download(buffer);
+
+      const mockJobDoc: any = {
+        _id: testJobId,
+        shop_id: testShopId,
+        status: ImportJobStatus.PENDING,
+        file_url: `imports/shop-${testShopId}/${testJobId}.xlsx`,
+        save: jest.fn().mockResolvedValue(true),
+        error_summary: [],
+      };
+      mockImportJobRepository.findById.mockResolvedValue(mockJobDoc);
+      mockProductRepository.findById.mockResolvedValue(null);
+      mockCategoryRepository.findById.mockResolvedValue({
+        _id: testCategoryId,
+        status: CategoryStatus.ACTIVE,
+      });
+      mockSkuRepository.findBySellerSkus.mockResolvedValue([]);
+
+      await service.processJob(testJobId);
+
+      expect(mockCategoryRepository.findById).toHaveBeenCalledWith(testCategoryId);
+      expect(mockProductCategoryRepository.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          category_id: testCategoryId,
+        }),
+        expect.anything(),
+      );
+      expect(mockJobDoc.status).toBe(ImportJobStatus.COMPLETED);
+      expect(mockJobDoc.success_count).toBe(1);
+    });
+
+    it('should attach new SKU to existing SPU without recreating product when productRefId matches existing SPU UUID', async () => {
+      const existingSpuId = '01912f30-0000-7000-8000-000000000001';
+      const existingProduct = {
+        _id: existingSpuId,
+        shop_id: testShopId,
+        title: 'Áo Thun Nam Cotton Tiêu Chuẩn Đã Có Sẵn',
+        primary_category_id: testCategoryId,
+        status: ProductStatus.DRAFT,
+        description: 'Mô tả sản phẩm có sẵn',
+        brand: 'Taca Fashion',
+      };
+
+      const buffer = await createWorkbookBuffer([
+        {
+          refId: `Áo Thun Nam [${existingSpuId}]`,
+          title: '', // left blank to inherit from existing SPU
+          catId: '', // left blank to inherit from existing SPU
+          sku: 'AT-NAM-NEW-SKU-99',
+          price: 199000,
+        },
+      ]);
+      mockS3Download(buffer);
+
+      const mockJobDoc: any = {
+        _id: testJobId,
+        shop_id: testShopId,
+        status: ImportJobStatus.PENDING,
+        file_url: `imports/shop-${testShopId}/${testJobId}.xlsx`,
+        save: jest.fn().mockResolvedValue(true),
+        error_summary: [],
+      };
+      mockImportJobRepository.findById.mockResolvedValue(mockJobDoc);
+      mockProductRepository.findById.mockImplementation(async (id: string) => {
+        if (id === existingSpuId) return existingProduct;
+        return null;
+      });
+      mockCategoryRepository.findById.mockResolvedValue({
+        _id: testCategoryId,
+        status: CategoryStatus.ACTIVE,
+      });
+      mockSkuRepository.findBySellerSkus.mockResolvedValue([]);
+
+      await service.processJob(testJobId);
+
+      expect(mockProductRepository.findById).toHaveBeenCalledWith(existingSpuId);
+      // Product and category binding must NOT be re-created
+      expect(mockProductRepository.create).not.toHaveBeenCalled();
+      expect(mockProductCategoryRepository.create).not.toHaveBeenCalled();
+
+      // New SKU MUST be created and bound to existing SPU ID
+      expect(mockSkuRepository.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          product_id: existingSpuId,
+          seller_sku: 'AT-NAM-NEW-SKU-99',
+          price_override: BigInt(199000),
+          status: SkuStatus.ACTIVE,
+        }),
+        expect.anything(),
+      );
+
+      // SKU outbox event emitted, but product.created event NOT emitted
+      expect(mockOutboxRepository.saveEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event_type: 'sku.created',
+          payload: expect.objectContaining({
+            product_id: existingSpuId,
+            seller_sku: 'AT-NAM-NEW-SKU-99',
+          }),
+        }),
+        expect.anything(),
+      );
+      expect(mockOutboxRepository.saveEvent).not.toHaveBeenCalledWith(
+        expect.objectContaining({
+          event_type: 'product.created',
+        }),
+        expect.anything(),
+      );
+
+      expect(mockJobDoc.status).toBe(ImportJobStatus.COMPLETED);
+      expect(mockJobDoc.success_count).toBe(1);
+      expect(mockJobDoc.error_count).toBe(0);
+    });
+
+    it('should process multiple category sheets in a single workbook, ignoring guide and example sheets', async () => {
+      const cat1Id = '01912f20-0000-7000-8000-000000000001';
+      const cat2Id = '01912f20-0000-7000-8000-000000000002';
+
+      const multiBuffer = await createMultiSheetWorkbookBuffer([
+        {
+          sheetName: 'Thời Trang Nam',
+          rows: [
+            {
+              refId: 'SPU-THOITRANG-01',
+              title: 'Áo Polo Nam Trắng',
+              catId: `Thời Trang Nam [${cat1Id}]`,
+              desc: 'Áo polo cao cấp thoáng mát',
+              sku: 'POLO-W-M',
+              price: 250000,
+            },
+          ],
+        },
+        {
+          sheetName: 'Giày Dép',
+          rows: [
+            {
+              refId: 'SPU-GIAYDEP-01',
+              title: 'Giày Sneaker Nam',
+              catId: `Giày Dép [${cat2Id}]`,
+              desc: 'Giày sneaker phong cách thể thao',
+              sku: 'SNK-W-40',
+              price: 550000,
+            },
+          ],
+        },
+        {
+          sheetName: 'Ví dụ điền mẫu',
+          rows: [
+            {
+              refId: 'EXAMPLE-01',
+              title: 'Dòng ví dụ cần bỏ qua',
+              catId: `Ví dụ [${cat1Id}]`,
+              sku: 'EXAMPLE-SKU',
+              price: 100000,
+            },
+          ],
+        },
+        {
+          sheetName: 'Hướng dẫn & Danh mục',
+          rows: [
+            {
+              refId: 'GUIDE-01',
+              title: 'Dòng hướng dẫn cần bỏ qua',
+              catId: `Hướng dẫn [${cat1Id}]`,
+              sku: 'GUIDE-SKU',
+              price: 100000,
+            },
+          ],
+        },
+      ]);
+      mockS3Download(multiBuffer);
+
+      const mockJobDoc: any = {
+        _id: testJobId,
+        shop_id: testShopId,
+        status: ImportJobStatus.PENDING,
+        file_url: `imports/shop-${testShopId}/${testJobId}.xlsx`,
+        save: jest.fn().mockResolvedValue(true),
+        error_summary: [],
+      };
+      mockImportJobRepository.findById.mockResolvedValue(mockJobDoc);
+      mockProductRepository.findById.mockResolvedValue(null);
+      mockCategoryRepository.findById.mockImplementation(async (id: string) => {
+        if (id === cat1Id || id === cat2Id) {
+          return { _id: id, status: CategoryStatus.ACTIVE };
+        }
+        return null;
+      });
+      mockSkuRepository.findBySellerSkus.mockResolvedValue([]);
+
+      await service.processJob(testJobId);
+
+      // Verify category binding for both categories from both sheets
+      expect(mockProductCategoryRepository.create).toHaveBeenCalledWith(
+        expect.objectContaining({ category_id: cat1Id }),
+        expect.anything(),
+      );
+      expect(mockProductCategoryRepository.create).toHaveBeenCalledWith(
+        expect.objectContaining({ category_id: cat2Id }),
+        expect.anything(),
+      );
+
+      // Verify both products were created
+      expect(mockProductRepository.create).toHaveBeenCalledWith(
+        expect.objectContaining({ title: 'Áo Polo Nam Trắng' }),
+        expect.anything(),
+      );
+      expect(mockProductRepository.create).toHaveBeenCalledWith(
+        expect.objectContaining({ title: 'Giày Sneaker Nam' }),
+        expect.anything(),
+      );
+
+      // Verify example/guide sheet rows were ignored
+      expect(mockProductRepository.create).not.toHaveBeenCalledWith(
+        expect.objectContaining({ title: 'Dòng ví dụ cần bỏ qua' }),
+        expect.anything(),
+      );
+      expect(mockProductRepository.create).not.toHaveBeenCalledWith(
+        expect.objectContaining({ title: 'Dòng hướng dẫn cần bỏ qua' }),
+        expect.anything(),
+      );
+
+      // Total success SPUs: 2
+      expect(mockJobDoc.status).toBe(ImportJobStatus.COMPLETED);
+      expect(mockJobDoc.success_count).toBe(2);
+      expect(mockJobDoc.error_count).toBe(0);
     });
   });
 });

@@ -28,6 +28,7 @@ describe('SellerImportController - POST /seller/products/import', () => {
 
   const mockExcelTemplateService = {
     generateTemplate: jest.fn(),
+    getOrInitTemplate: jest.fn(),
   };
 
   const mockShopSnapshotRepository = {

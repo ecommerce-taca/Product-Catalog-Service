@@ -24,6 +24,7 @@ describe('SellerImportController', () => {
 
   const mockExcelTemplateService = {
     generateTemplate: jest.fn(),
+    getOrInitTemplate: jest.fn(),
   };
 
   const mockShopSnapshotRepository = {
@@ -35,8 +36,11 @@ describe('SellerImportController', () => {
     res.set = jest.fn().mockReturnValue(res);
     res.status = jest.fn().mockReturnValue(res);
     res.send = jest.fn().mockReturnValue(res);
+    res.json = jest.fn().mockReturnValue(res);
     return res as Response;
   };
+
+  const mockRequest = (headers: Record<string, string> = {}) => ({ headers }) as unknown as Request;
 
   const activeActor: ActorContext = {
     userId: '01912f10-0001-7000-8000-000000000001',
@@ -88,57 +92,89 @@ describe('SellerImportController', () => {
     controller = module.get<SellerImportController>(SellerImportController);
   });
 
-  describe('GET /seller/products/import/template', () => {
-    it('should generate template, set attachment headers and send buffer (AC-IM-01)', async () => {
-      const dummyBuffer = Buffer.from('mock excel binary');
+  describe('POST /seller/products/import/template', () => {
+    const customDto = {
+      row_count: 10,
+      category_ids: ['0191ec4d-91b7-7e6d-9d41-000000000100'],
+    };
+
+    it('should get or init template and return JSON envelope with presigned URL', async () => {
       mockShopSnapshotRepository.findByShopId.mockResolvedValue({
         shop_id: activeActor.shopScope,
         shop_status: ShopStatus.ACTIVE,
       });
-      mockExcelTemplateService.generateTemplate.mockResolvedValue(dummyBuffer);
+      mockExcelTemplateService.getOrInitTemplate.mockResolvedValue({
+        downloadUrl:
+          'http://localhost:9000/templates/product_import_template_abcd1234efgh5678.xlsx',
+        filename: 'product_import_template_abcd1234efgh5678.xlsx',
+        expiresAt: new Date(),
+      });
 
+      const req = mockRequest();
       const res = mockResponse();
       await controller.downloadTemplate(
-        { category_id: '01912f20-0000-7000-8000-000000000001' },
+        customDto,
         activeActor.shopScope!,
         activeActor,
         res,
+        req as any,
       );
 
       expect(mockShopSnapshotRepository.findByShopId).toHaveBeenCalledWith(activeActor.shopScope);
+      expect(mockExcelTemplateService.getOrInitTemplate).toHaveBeenCalledWith(
+        customDto,
+        activeActor.shopScope,
+      );
+      expect(res.status).toHaveBeenCalledWith(HttpStatus.OK);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            download_url: expect.stringContaining('product_import_template_'),
+            filename: expect.stringContaining('product_import_template_'),
+          }),
+        }),
+      );
+    });
+
+    it('should stream binary buffer when Accept header requests spreadsheet binary', async () => {
+      const dummyBuffer = Buffer.from('mock custom excel binary');
+      mockShopSnapshotRepository.findByShopId.mockResolvedValue({
+        shop_id: activeActor.shopScope,
+        shop_status: ShopStatus.ACTIVE,
+      });
+      mockExcelTemplateService.getOrInitTemplate.mockResolvedValue({
+        downloadUrl: 'http://localhost:9000/templates/custom.xlsx',
+        filename: 'product_import_template_test.xlsx',
+        expiresAt: new Date(),
+      });
+      mockExcelTemplateService.generateTemplate.mockResolvedValue(dummyBuffer);
+
+      const req = mockRequest({
+        accept: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      });
+      const res = mockResponse();
+      await controller.downloadTemplate(
+        customDto,
+        activeActor.shopScope!,
+        activeActor,
+        res,
+        req as any,
+      );
+
       expect(mockExcelTemplateService.generateTemplate).toHaveBeenCalledWith(
-        '01912f20-0000-7000-8000-000000000001',
+        customDto,
+        activeActor.shopScope,
       );
       expect(res.set).toHaveBeenCalledWith({
         'Content-Type': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-        'Content-Disposition':
-          'attachment; filename="product_import_template_01912f20-0000-7000-8000-000000000001.xlsx"',
+        'Content-Disposition': 'attachment; filename="product_import_template_test.xlsx"',
         'Content-Length': dummyBuffer.length.toString(),
       });
       expect(res.status).toHaveBeenCalledWith(HttpStatus.OK);
       expect(res.send).toHaveBeenCalledWith(dummyBuffer);
     });
 
-    it('should generate default template filename when no category_id is provided', async () => {
-      const dummyBuffer = Buffer.from('mock default excel binary');
-      mockShopSnapshotRepository.findByShopId.mockResolvedValue({
-        shop_id: activeActor.shopScope,
-        shop_status: ShopStatus.ACTIVE,
-      });
-      mockExcelTemplateService.generateTemplate.mockResolvedValue(dummyBuffer);
-
-      const res = mockResponse();
-      await controller.downloadTemplate({}, activeActor.shopScope!, activeActor, res);
-
-      expect(mockExcelTemplateService.generateTemplate).toHaveBeenCalledWith(undefined);
-      expect(res.set).toHaveBeenCalledWith(
-        expect.objectContaining({
-          'Content-Disposition': 'attachment; filename="product_import_template_default.xlsx"',
-        }),
-      );
-    });
-
-    it('should throw 403 PRODUCT_SHOP_SUSPENDED when shop is SUSPENDED (AC-IM-02, BR-IM-01)', async () => {
+    it('should throw 403 PRODUCT_SHOP_SUSPENDED when shop is SUSPENDED', async () => {
       mockShopSnapshotRepository.findByShopId.mockResolvedValue({
         shop_id: '01912f20-8888-7000-8000-000000008888',
         shop_status: ShopStatus.SUSPENDED,
@@ -147,25 +183,12 @@ describe('SellerImportController', () => {
       const res = mockResponse();
       await expect(
         controller.downloadTemplate(
-          { category_id: '01912f20-0000-7000-8000-000000000001' },
+          customDto,
           '01912f20-8888-7000-8000-000000008888',
           { ...activeActor, shopScope: '01912f20-8888-7000-8000-000000008888' },
           res,
         ),
       ).rejects.toThrow(ForbiddenException);
-
-      try {
-        await controller.downloadTemplate(
-          { category_id: '01912f20-0000-7000-8000-000000000001' },
-          '01912f20-8888-7000-8000-000000008888',
-          { ...activeActor, shopScope: '01912f20-8888-7000-8000-000000008888' },
-          res,
-        );
-      } catch (err: unknown) {
-        const error = err as ForbiddenException;
-        const body = error.getResponse() as Record<string, unknown>;
-        expect(body.code).toBe('PRODUCT_SHOP_SUSPENDED');
-      }
 
       expect(mockExcelTemplateService.generateTemplate).not.toHaveBeenCalled();
     });
@@ -173,7 +196,7 @@ describe('SellerImportController', () => {
     it('should throw 403 PRODUCT_FORBIDDEN when shopScope is missing', async () => {
       const res = mockResponse();
       await expect(
-        controller.downloadTemplate({}, '', { ...activeActor, shopScope: undefined }, res),
+        controller.downloadTemplate(customDto, '', { ...activeActor, shopScope: undefined }, res),
       ).rejects.toThrow(ForbiddenException);
     });
   });

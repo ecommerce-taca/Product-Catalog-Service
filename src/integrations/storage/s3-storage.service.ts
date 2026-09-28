@@ -211,13 +211,19 @@ export class S3StorageService {
   /**
    * Uploads an in-memory buffer directly to S3/MinIO bucket.
    */
-  async uploadBuffer(objectKey: string, buffer: Buffer, contentType: string): Promise<void> {
+  async uploadBuffer(
+    objectKey: string,
+    buffer: Buffer,
+    contentType: string,
+    contentDisposition?: string,
+  ): Promise<void> {
     const cleanKey = objectKey.replace(/^\//, '');
     const command = new PutObjectCommand({
       Bucket: this.bucket,
       Key: cleanKey,
       Body: buffer,
       ContentType: contentType,
+      ...(contentDisposition ? { ContentDisposition: contentDisposition } : {}),
     });
     await this.s3Client.send(command);
   }

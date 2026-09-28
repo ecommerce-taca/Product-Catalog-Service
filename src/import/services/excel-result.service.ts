@@ -108,92 +108,118 @@ export class ExcelResultService {
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.load(originalBuffer as any);
 
-    const worksheet = workbook.getWorksheet('Sản phẩm & Biến thể') || workbook.getWorksheet(1);
-    if (!worksheet) {
+    const IGNORE_SHEET_REGEX = /hướng dẫn|ví dụ|guide|example/i;
+    const dataSheets = (workbook.worksheets || []).filter(
+      (ws) => !IGNORE_SHEET_REGEX.test(ws.name),
+    );
+
+    if (dataSheets.length === 0) {
       return this.generateFallbackBuffer(job);
     }
 
-    const headerRow = worksheet.getRow(1);
-    let lastCol = headerRow.actualCellCount || headerRow.cellCount;
-    if (lastCol <= 0) {
-      lastCol = 10;
-    }
+    // Group errors by sheet_name:row_index and fallback row_index
+    const sheetErrorMap = new Map<string, string[]>();
+    const fallbackRowErrorMap = new Map<number, string[]>();
 
-    const statusCol = lastCol + 1;
-    const errorCol = lastCol + 2;
-
-    const statusHeaderCell = headerRow.getCell(statusCol);
-    statusHeaderCell.value = 'Trạng thái xử lý (Import Status)';
-    statusHeaderCell.font = { bold: true };
-    statusHeaderCell.fill = {
-      type: 'pattern',
-      pattern: 'solid',
-      fgColor: { argb: 'FFFFD8A8' }, // light orange
-    };
-
-    const errorHeaderCell = headerRow.getCell(errorCol);
-    errorHeaderCell.value = 'Lý do lỗi (Error Reason)';
-    errorHeaderCell.font = { bold: true };
-    errorHeaderCell.fill = {
-      type: 'pattern',
-      pattern: 'solid',
-      fgColor: { argb: 'FFFFC7CE' }, // light red
-    };
-    headerRow.commit();
-
-    // Group errors by row_index
-    const errorMap = new Map<number, string[]>();
     if (job.error_summary && job.error_summary.length > 0) {
       for (const err of job.error_summary) {
-        const list = errorMap.get(err.row_index) || [];
-        list.push(err.error_message);
-        errorMap.set(err.row_index, list);
-      }
-    }
-
-    // Traverse rows starting from row 2
-    for (let r = 2; r <= worksheet.rowCount; r++) {
-      const row = worksheet.getRow(r);
-      if (!row.hasValues) continue;
-
-      const rowErrors = errorMap.get(r);
-      const statusCell = row.getCell(statusCol);
-      const errorCell = row.getCell(errorCol);
-
-      if (rowErrors && rowErrors.length > 0) {
-        statusCell.value = 'THẤT BẠI (FAILED)';
-        errorCell.value = ExcelFormulaSanitizer.sanitize(rowErrors.join('; '));
-
-        const lightRedFill: ExcelJS.Fill = {
-          type: 'pattern',
-          pattern: 'solid',
-          fgColor: { argb: 'FFFFC7CE' },
-        };
-        statusCell.fill = lightRedFill;
-        errorCell.fill = lightRedFill;
-        statusCell.font = { color: { argb: 'FF9C0006' } };
-        errorCell.font = { color: { argb: 'FF9C0006' } };
-      } else {
-        statusCell.value = 'THÀNH CÔNG (SUCCESS)';
-        errorCell.value = 'Đã tạo DRAFT';
-      }
-      row.commit();
-    }
-
-    // Sanitize 100% of cells against Formula Injection (CWE-1236 / L-07)
-    worksheet.eachRow((row, rowNumber) => {
-      if (rowNumber === 1) return;
-      row.eachCell((cell) => {
-        if (cell.value !== null && cell.value !== undefined) {
-          if (typeof cell.value === 'string') {
-            cell.value = ExcelFormulaSanitizer.sanitize(cell.value);
-          } else if (typeof cell.value === 'object' && 'text' in cell.value) {
-            (cell.value as any).text = ExcelFormulaSanitizer.sanitize((cell.value as any).text);
-          }
+        if (err.sheet_name) {
+          const key = `${err.sheet_name.toLowerCase()}:${err.row_index}`;
+          const list = sheetErrorMap.get(key) || [];
+          list.push(err.error_message);
+          sheetErrorMap.set(key, list);
         }
+        const fallbackList = fallbackRowErrorMap.get(err.row_index) || [];
+        fallbackList.push(err.error_message);
+        fallbackRowErrorMap.set(err.row_index, fallbackList);
+      }
+    }
+
+    // Annotate every data sheet
+    for (const worksheet of dataSheets) {
+      const headerRow = worksheet.getRow(1);
+      let lastCol = headerRow.actualCellCount || headerRow.cellCount;
+      if (lastCol <= 0) {
+        lastCol = 10;
+      }
+
+      const statusCol = lastCol + 1;
+      const errorCol = lastCol + 2;
+
+      const statusHeaderCell = headerRow.getCell(statusCol);
+      statusHeaderCell.value = 'Trạng thái xử lý (Import Status)';
+      statusHeaderCell.font = { bold: true };
+      statusHeaderCell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FFFFD8A8' }, // light orange
+      };
+
+      const errorHeaderCell = headerRow.getCell(errorCol);
+      errorHeaderCell.value = 'Lý do lỗi (Error Reason)';
+      errorHeaderCell.font = { bold: true };
+      errorHeaderCell.fill = {
+        type: 'pattern',
+        pattern: 'solid',
+        fgColor: { argb: 'FFFFC7CE' }, // light red
+      };
+      headerRow.commit();
+
+      // Traverse rows starting from row 2
+      for (let r = 2; r <= worksheet.rowCount; r++) {
+        const row = worksheet.getRow(r);
+        if (!row.hasValues) continue;
+
+        const sheetKey = `${worksheet.name.toLowerCase()}:${r}`;
+        const rowErrors =
+          sheetErrorMap.get(sheetKey) ||
+          (dataSheets.length === 1 ? fallbackRowErrorMap.get(r) : undefined);
+        const statusCell = row.getCell(statusCol);
+        const errorCell = row.getCell(errorCol);
+
+        if (rowErrors && rowErrors.length > 0) {
+          statusCell.value = 'THẤT BẠI (FAILED)';
+          errorCell.value = ExcelFormulaSanitizer.sanitize(rowErrors.join('; '));
+
+          const lightRedFill: ExcelJS.Fill = {
+            type: 'pattern',
+            pattern: 'solid',
+            fgColor: { argb: 'FFFFC7CE' },
+          };
+          statusCell.fill = lightRedFill;
+          errorCell.fill = lightRedFill;
+          statusCell.font = { color: { argb: 'FF9C0006' } };
+          errorCell.font = { color: { argb: 'FF9C0006' } };
+        } else {
+          statusCell.value = 'THÀNH CÔNG (SUCCESS)';
+          errorCell.value = 'Đã tạo DRAFT';
+        }
+        row.commit();
+      }
+
+      // Sanitize 100% of cells against Formula Injection (CWE-1236 / L-07 / SEC-FORMULA-01)
+      worksheet.eachRow((row, rowNumber) => {
+        if (rowNumber === 1) return;
+        row.eachCell((cell) => {
+          if (cell.value !== null && cell.value !== undefined) {
+            // Neutralize formula objects
+            if (
+              cell.type === ExcelJS.ValueType.Formula ||
+              (typeof cell.value === 'object' && 'formula' in (cell.value as any))
+            ) {
+              const rawFormula = (cell.value as any)?.formula || (cell as any).formula;
+              const res = (cell.value as any)?.result ?? '';
+              cell.value = ExcelFormulaSanitizer.sanitize(String(res || rawFormula));
+            } else if (typeof cell.value === 'string') {
+              cell.value = ExcelFormulaSanitizer.sanitize(cell.value);
+            } else if (typeof cell.value === 'object' && 'text' in cell.value) {
+              (cell.value as any).text = ExcelFormulaSanitizer.sanitize((cell.value as any).text);
+            }
+          }
+        });
+        row.commit();
       });
-      row.commit();
-    });
+    }
 
     const buffer = await workbook.xlsx.writeBuffer();
     return Buffer.from(buffer);
