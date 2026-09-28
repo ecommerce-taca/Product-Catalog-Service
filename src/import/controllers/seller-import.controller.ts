@@ -270,19 +270,40 @@ export class SellerImportController {
       file.mimetype || 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     );
 
-    // 7. Create PENDING job in MongoDB
-    const job = await this.importJobRepo.create({
-      _id: jobId,
-      shop_id: actorShopScope,
-      actor_user_id: actor?.userId || '01910000-0000-7000-8000-000000000000',
-      status: ImportJobStatus.PENDING,
-      file_url: s3Key,
-      total_rows: null,
-      processed_rows: 0,
-      success_count: 0,
-      error_count: 0,
-      error_summary: [],
-    });
+    // 7. Create PENDING job in MongoDB (with E11000 race-condition handling - B-DB-03 / SF-ARCH-03)
+    let job;
+    try {
+      job = await this.importJobRepo.create({
+        _id: jobId,
+        shop_id: actorShopScope,
+        actor_user_id: actor?.userId || '01910000-0000-7000-8000-000000000000',
+        status: ImportJobStatus.PENDING,
+        file_url: s3Key,
+        total_rows: null,
+        processed_rows: 0,
+        success_count: 0,
+        error_count: 0,
+        error_summary: [],
+      });
+    } catch (err: any) {
+      if (
+        err?.code === 11000 ||
+        err?.message?.includes('11000') ||
+        err?.message?.includes('idx_import_jobs_active_shop_unique') ||
+        err?.message?.includes('idx_import_jobs_shop_active_unique')
+      ) {
+        try {
+          await this.storageService.deleteObjects([s3Key]);
+        } catch (cleanupErr: unknown) {
+          this.logger.warn(`Failed to cleanup s3 file on conflict: ${cleanupErr}`);
+        }
+        throw new ConflictException({
+          code: 'PRODUCT_IMPORT_JOB_RUNNING',
+          message: 'Gian hàng đang có tiến trình nhập sản phẩm đang xử lý. Vui lòng chờ hoàn tất.',
+        });
+      }
+      throw err;
+    }
 
     // 8. Trigger background worker asynchronously
     setImmediate(() => {
@@ -323,6 +344,18 @@ export class SellerImportController {
       });
     }
 
+    const shopSnapshot = await this.shopSnapshotRepository.findByShopId(actorShopScope);
+    if (
+      shopSnapshot &&
+      (shopSnapshot.shop_status === ShopStatus.SUSPENDED ||
+        shopSnapshot.shop_status === ('SUSPENDED' as ShopStatus))
+    ) {
+      throw new ForbiddenException({
+        code: 'PRODUCT_SHOP_SUSPENDED',
+        message: 'Gian hàng đang bị tạm ngưng hoạt động (SUSPENDED).',
+      });
+    }
+
     if (!UUID_REGEX.test(jobId)) {
       throw new BadRequestException({
         code: 'PRODUCT_INVALID_INPUT',
@@ -330,7 +363,9 @@ export class SellerImportController {
       });
     }
 
-    const job = await this.importJobRepo.findById(jobId);
+    const job = this.importJobRepo.findByShopAndId
+      ? await this.importJobRepo.findByShopAndId(actorShopScope, jobId)
+      : await this.importJobRepo.findById(jobId);
     if (!job || job.shop_id !== actorShopScope) {
       throw new NotFoundException({
         code: 'PRODUCT_NOT_FOUND',
@@ -366,6 +401,18 @@ export class SellerImportController {
       });
     }
 
+    const shopSnapshot = await this.shopSnapshotRepository.findByShopId(actorShopScope);
+    if (
+      shopSnapshot &&
+      (shopSnapshot.shop_status === ShopStatus.SUSPENDED ||
+        shopSnapshot.shop_status === ('SUSPENDED' as ShopStatus))
+    ) {
+      throw new ForbiddenException({
+        code: 'PRODUCT_SHOP_SUSPENDED',
+        message: 'Gian hàng đang bị tạm ngưng hoạt động (SUSPENDED).',
+      });
+    }
+
     if (!UUID_REGEX.test(jobId)) {
       throw new BadRequestException({
         code: 'PRODUCT_INVALID_INPUT',
@@ -373,7 +420,9 @@ export class SellerImportController {
       });
     }
 
-    const job = await this.importJobRepo.findById(jobId);
+    const job = this.importJobRepo.findByShopAndId
+      ? await this.importJobRepo.findByShopAndId(actorShopScope, jobId)
+      : await this.importJobRepo.findById(jobId);
     if (!job || job.shop_id !== actorShopScope) {
       throw new NotFoundException({
         code: 'PRODUCT_NOT_FOUND',
@@ -431,6 +480,9 @@ export class SellerImportController {
         expires_at: expiresAt,
       };
 
+      const requestId =
+        TraceContextStorage.getRequestId() || (req?.headers?.['x-request-id'] as string) || '';
+
       res.status(HttpStatus.OK).json({
         job_id: resultDto.job_id,
         result_file_url: resultDto.result_file_url,
@@ -439,6 +491,10 @@ export class SellerImportController {
         error_count: resultDto.error_count,
         expires_at: resultDto.expires_at,
         data: resultDto,
+        meta: {
+          request_id: requestId,
+          as_of: new Date().toISOString(),
+        },
       });
       return;
     }

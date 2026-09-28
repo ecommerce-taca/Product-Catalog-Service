@@ -28,17 +28,20 @@ describe('ImportWorkerService', () => {
   const mockImportJobRepository = {
     findById: jest.fn(),
     update: jest.fn(),
+    updateHeartbeat: jest.fn().mockResolvedValue({}),
     create: jest.fn(),
   };
 
   const mockProductRepository = {
     create: jest.fn(),
     findById: jest.fn(),
+    update: jest.fn().mockResolvedValue({}),
   };
 
   const mockSkuRepository = {
     findBySellerSkus: jest.fn(),
     create: jest.fn(),
+    findByProductId: jest.fn().mockResolvedValue([]),
   };
 
   const mockCategoryRepository = {
@@ -51,6 +54,7 @@ describe('ImportWorkerService', () => {
 
   const mockProductMediaRepository = {
     create: jest.fn(),
+    findByProductId: jest.fn().mockResolvedValue([]),
   };
 
   const mockOutboxRepository = {
@@ -63,6 +67,7 @@ describe('ImportWorkerService', () => {
       send: jest.fn(),
     },
     uploadBuffer: jest.fn().mockResolvedValue(undefined),
+    deleteObjects: jest.fn().mockResolvedValue(undefined),
   };
 
   const mockTransactionRunner = {
@@ -200,6 +205,10 @@ describe('ImportWorkerService', () => {
 
   beforeEach(async () => {
     jest.clearAllMocks();
+    delete (mockProductRepository as any).findOne;
+    delete (mockCategoryRepository as any).findOne;
+    delete (mockProductRepository as any).findByIdOrCode;
+    delete (mockCategoryRepository as any).findByIdOrCode;
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -748,11 +757,13 @@ describe('ImportWorkerService', () => {
               catId: testCategoryId,
               sku: 'AO-TRANG-39',
               price: 250000,
+              attributes: { 'Kích cỡ': '39' },
             },
             {
               refId: 'REF-AO-01',
               sku: 'AO-TRANG-40',
               price: 250000,
+              attributes: { 'Kích cỡ': '40' },
             },
           ],
         },
@@ -1049,6 +1060,519 @@ describe('ImportWorkerService', () => {
       expect(mockJobDoc.status).toBe(ImportJobStatus.COMPLETED);
       expect(mockJobDoc.success_count).toBe(2);
       expect(mockJobDoc.error_count).toBe(0);
+    });
+  });
+
+  describe('Wave 2 Hardening & Business Codes (Dev 3)', () => {
+    it('should reject duplicate empty variants (variantKey = "") within the same SPU (B-LR-01)', async () => {
+      const buffer = await createWorkbookBuffer([
+        {
+          refId: 'SINGLE-PROD-01',
+          title: 'Sản phẩm đơn không có biến thể',
+          catId: testCategoryId,
+          sku: 'SKU-SINGLE-01',
+          price: 150000,
+        },
+        {
+          refId: 'SINGLE-PROD-01',
+          sku: 'SKU-SINGLE-02',
+          price: 160000,
+        },
+      ]);
+      mockS3Download(buffer);
+
+      const mockJobDoc: any = {
+        _id: testJobId,
+        shop_id: testShopId,
+        status: ImportJobStatus.PENDING,
+        file_url: `imports/shop-${testShopId}/${testJobId}.xlsx`,
+        save: jest.fn().mockResolvedValue(true),
+        error_summary: [],
+      };
+      mockImportJobRepository.findById.mockResolvedValue(mockJobDoc);
+      mockProductRepository.findById.mockResolvedValue(null);
+      mockCategoryRepository.findById.mockResolvedValue({
+        _id: testCategoryId,
+        status: CategoryStatus.ACTIVE,
+      });
+      mockSkuRepository.findBySellerSkus.mockResolvedValue([]);
+
+      await service.processJob(testJobId);
+
+      expect(mockJobDoc.status).toBe(ImportJobStatus.COMPLETED);
+      expect(mockJobDoc.success_count).toBe(0);
+      expect(mockJobDoc.error_count).toBe(2);
+      expect(mockJobDoc.error_summary).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            error_code: 'PRODUCT_SKU_DUPLICATE_VARIANT',
+            seller_sku: 'SKU-SINGLE-02',
+          }),
+        ]),
+      );
+    });
+
+    it('should not set is_cover = true for new media when existing SPU already has a cover media (B-DB-01)', async () => {
+      const existingSpuId = '01912f30-7777-7000-8000-000000000001';
+      const existingProduct = {
+        _id: existingSpuId,
+        shop_id: testShopId,
+        title: 'Áo Khoác Nam Hiện Hữu',
+        primary_category_id: testCategoryId,
+        status: ProductStatus.DRAFT,
+      };
+
+      const buffer = await createWorkbookBuffer([
+        {
+          refId: existingSpuId,
+          sku: 'AK-NEW-VAR-01',
+          price: 500000,
+          urls: 'https://images.unsplash.com/photo-1.jpg, https://images.unsplash.com/photo-2.jpg',
+          attributes: { 'Kích cỡ': 'L' },
+        },
+      ]);
+      mockS3Download(buffer);
+
+      const mockJobDoc: any = {
+        _id: testJobId,
+        shop_id: testShopId,
+        status: ImportJobStatus.PENDING,
+        file_url: `imports/shop-${testShopId}/${testJobId}.xlsx`,
+        save: jest.fn().mockResolvedValue(true),
+        error_summary: [],
+      };
+      mockImportJobRepository.findById.mockResolvedValue(mockJobDoc);
+      mockProductRepository.findById.mockImplementation(async (id: string) => {
+        if (id === existingSpuId) return existingProduct;
+        return null;
+      });
+      mockCategoryRepository.findById.mockResolvedValue({
+        _id: testCategoryId,
+        status: CategoryStatus.ACTIVE,
+      });
+      mockSkuRepository.findBySellerSkus.mockResolvedValue([]);
+      mockSkuRepository.findByProductId.mockResolvedValue([]);
+
+      // Simulate that existing SPU already has a READY cover media
+      mockProductMediaRepository.findByProductId.mockResolvedValue([
+        {
+          _id: '01912f30-8888-7000-8000-000000000001',
+          is_cover: true,
+          status: 'READY',
+        },
+      ]);
+
+      mockMediaDownloadService.downloadAndUploadImage.mockResolvedValue({
+        mediaId: '01912f30-9999-7000-8000-000000000001',
+        objectKey: 'products/media-new.jpg',
+        contentType: 'image/jpeg',
+        sizeBytes: 1024,
+        sha256: 'abcd1234abcd1234',
+      });
+
+      await service.processJob(testJobId);
+
+      expect(mockJobDoc.status).toBe(ImportJobStatus.COMPLETED);
+      expect(mockJobDoc.success_count).toBe(1);
+      // All inserted media for this SPU must have is_cover = false
+      expect(mockProductMediaRepository.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          is_cover: false,
+        }),
+        expect.anything(),
+      );
+    });
+
+    it('should reject existing SPU when status is BLOCKED or ARCHIVED (SF-1 / SF-EDGE-01)', async () => {
+      const existingSpuId = '01912f30-6666-7000-8000-000000000001';
+      const blockedProduct = {
+        _id: existingSpuId,
+        shop_id: testShopId,
+        title: 'Sản Phẩm Đang Bị Khóa',
+        primary_category_id: testCategoryId,
+        status: ProductStatus.BLOCKED,
+      };
+
+      const buffer = await createWorkbookBuffer([
+        {
+          refId: existingSpuId,
+          sku: 'BLOCKED-SKU-01',
+          price: 200000,
+        },
+      ]);
+      mockS3Download(buffer);
+
+      const mockJobDoc: any = {
+        _id: testJobId,
+        shop_id: testShopId,
+        status: ImportJobStatus.PENDING,
+        file_url: `imports/shop-${testShopId}/${testJobId}.xlsx`,
+        save: jest.fn().mockResolvedValue(true),
+        error_summary: [],
+      };
+      mockImportJobRepository.findById.mockResolvedValue(mockJobDoc);
+      mockProductRepository.findById.mockResolvedValue(blockedProduct);
+
+      await service.processJob(testJobId);
+
+      expect(mockJobDoc.status).toBe(ImportJobStatus.COMPLETED);
+      expect(mockJobDoc.success_count).toBe(0);
+      expect(mockJobDoc.error_summary).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            error_code: 'PRODUCT_SPU_STATUS_INVALID',
+            error_message: expect.stringContaining('BLOCKED'),
+          }),
+        ]),
+      );
+      expect(mockSkuRepository.create).not.toHaveBeenCalled();
+    });
+
+    it('should reject new SKU when variant_key already exists in DB for that SPU (SF-EDGE-01)', async () => {
+      const existingSpuId = '01912f30-5555-7000-8000-000000000001';
+      const existingProduct = {
+        _id: existingSpuId,
+        shop_id: testShopId,
+        title: 'Sản Phẩm Đã Có Size M Trong DB',
+        primary_category_id: testCategoryId,
+        status: ProductStatus.DRAFT,
+      };
+
+      const buffer = await createWorkbookBuffer([
+        {
+          refId: existingSpuId,
+          sku: 'NEW-SELLER-SKU-M',
+          price: 300000,
+          attributes: { 'Kích cỡ': 'M' },
+        },
+      ]);
+      mockS3Download(buffer);
+
+      const mockJobDoc: any = {
+        _id: testJobId,
+        shop_id: testShopId,
+        status: ImportJobStatus.PENDING,
+        file_url: `imports/shop-${testShopId}/${testJobId}.xlsx`,
+        save: jest.fn().mockResolvedValue(true),
+        error_summary: [],
+      };
+      mockImportJobRepository.findById.mockResolvedValue(mockJobDoc);
+      mockProductRepository.findById.mockResolvedValue(existingProduct);
+      mockCategoryRepository.findById.mockResolvedValue({
+        _id: testCategoryId,
+        status: CategoryStatus.ACTIVE,
+      });
+      mockSkuRepository.findBySellerSkus.mockResolvedValue([]);
+      // SPU already has a SKU with variant_key: 'Kích cỡ=M'
+      mockSkuRepository.findByProductId.mockResolvedValue([
+        {
+          _id: 'existing-sku-1',
+          variant_key: 'Kích cỡ=M',
+        },
+      ]);
+
+      await service.processJob(testJobId);
+
+      expect(mockJobDoc.status).toBe(ImportJobStatus.COMPLETED);
+      expect(mockJobDoc.success_count).toBe(0);
+      expect(mockJobDoc.error_summary).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            error_code: 'PRODUCT_SKU_DUPLICATE_VARIANT',
+            seller_sku: 'NEW-SELLER-SKU-M',
+          }),
+        ]),
+      );
+      expect(mockSkuRepository.create).not.toHaveBeenCalled();
+    });
+
+    it('should call S3 deleteObjects when Stage 3 transaction rolls back (B-ARCH-01)', async () => {
+      const buffer = await createWorkbookBuffer([
+        {
+          refId: 'ROLLBACK-SPU-01',
+          title: 'Sản Phẩm Kiểm Tra Rollback S3',
+          catId: testCategoryId,
+          sku: 'RB-SKU-01',
+          price: 250000,
+          urls: 'https://images.unsplash.com/photo-rb.jpg',
+        },
+      ]);
+      mockS3Download(buffer);
+
+      const mockJobDoc: any = {
+        _id: testJobId,
+        shop_id: testShopId,
+        status: ImportJobStatus.PENDING,
+        file_url: `imports/shop-${testShopId}/${testJobId}.xlsx`,
+        save: jest.fn().mockResolvedValue(true),
+        error_summary: [],
+      };
+      mockImportJobRepository.findById.mockResolvedValue(mockJobDoc);
+      mockProductRepository.findById.mockResolvedValue(null);
+      mockCategoryRepository.findById.mockResolvedValue({
+        _id: testCategoryId,
+        status: CategoryStatus.ACTIVE,
+      });
+      mockSkuRepository.findBySellerSkus.mockResolvedValue([]);
+
+      mockMediaDownloadService.downloadAndUploadImage.mockResolvedValue({
+        mediaId: 'media-rb-1',
+        objectKey: 'products/media-rb-1.jpg',
+        contentType: 'image/jpeg',
+        sizeBytes: 1024,
+        sha256: 'hash-rb',
+      });
+
+      // Force Stage 3 transaction failure
+      mockTransactionRunner.execute.mockRejectedValueOnce(
+        new Error('Transaction aborted due to network error'),
+      );
+
+      await service.processJob(testJobId);
+
+      expect(mockJobDoc.status).toBe(ImportJobStatus.FAILED);
+      expect(mockS3StorageService.deleteObjects).toHaveBeenCalledWith(['products/media-rb-1.jpg']);
+    });
+
+    it('should duplicate PRODUCT_SPU_REJECTED error to child SKUs when SPU is rejected (B-UX-01)', async () => {
+      const buffer = await createWorkbookBuffer([
+        {
+          refId: 'SPU-REJECT-01',
+          title: 'Ngắn', // Title < 10 chars -> rejects entire SPU
+          catId: testCategoryId,
+          sku: 'SKU-A-01',
+          price: 200000,
+          attributes: { 'Kích cỡ': 'S' },
+        },
+        {
+          refId: 'SPU-REJECT-01',
+          sku: 'SKU-B-02',
+          price: 200000,
+          attributes: { 'Kích cỡ': 'M' },
+        },
+      ]);
+      mockS3Download(buffer);
+
+      const mockJobDoc: any = {
+        _id: testJobId,
+        shop_id: testShopId,
+        status: ImportJobStatus.PENDING,
+        file_url: `imports/shop-${testShopId}/${testJobId}.xlsx`,
+        save: jest.fn().mockResolvedValue(true),
+        error_summary: [],
+      };
+      mockImportJobRepository.findById.mockResolvedValue(mockJobDoc);
+      mockProductRepository.findById.mockResolvedValue(null);
+      mockCategoryRepository.findById.mockResolvedValue({
+        _id: testCategoryId,
+        status: CategoryStatus.ACTIVE,
+      });
+      mockSkuRepository.findBySellerSkus.mockResolvedValue([]);
+
+      await service.processJob(testJobId);
+
+      expect(mockJobDoc.status).toBe(ImportJobStatus.COMPLETED);
+      expect(mockJobDoc.success_count).toBe(0);
+      expect(mockJobDoc.error_count).toBe(2);
+
+      // Child SKU rows must receive PRODUCT_SPU_REJECTED
+      const rejectedSkuErrors = mockJobDoc.error_summary.filter(
+        (e: any) => e.error_code === 'PRODUCT_SPU_REJECTED',
+      );
+      expect(rejectedSkuErrors.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it('should resolve category code [CAT-1001] and product code [PRD-8K2N9X]', async () => {
+      const existingProduct = {
+        _id: '01912f30-4444-7000-8000-000000000001',
+        shop_id: testShopId,
+        product_code: 'PRD-8K2N9X',
+        title: 'Áo Khoác Gió Nam Cao Cấp',
+        primary_category_id: testCategoryId,
+        status: ProductStatus.DRAFT,
+      };
+
+      const buffer = await createWorkbookBuffer([
+        {
+          refId: 'Áo Khoác [PRD-8K2N9X]',
+          catId: 'Thời Trang Nam [CAT-1001]',
+          sku: 'AK-PRD-01',
+          price: 350000,
+        },
+      ]);
+      mockS3Download(buffer);
+
+      const mockJobDoc: any = {
+        _id: testJobId,
+        shop_id: testShopId,
+        status: ImportJobStatus.PENDING,
+        file_url: `imports/shop-${testShopId}/${testJobId}.xlsx`,
+        save: jest.fn().mockResolvedValue(true),
+        error_summary: [],
+      };
+      mockImportJobRepository.findById.mockResolvedValue(mockJobDoc);
+      (mockProductRepository as any).findOne = jest.fn().mockResolvedValue(existingProduct);
+      (mockCategoryRepository as any).findOne = jest.fn().mockResolvedValue({
+        _id: testCategoryId,
+        category_code: 'CAT-1001',
+        status: CategoryStatus.ACTIVE,
+      });
+      mockSkuRepository.findBySellerSkus.mockResolvedValue([]);
+      mockSkuRepository.findByProductId.mockResolvedValue([]);
+
+      await service.processJob(testJobId);
+
+      expect(mockJobDoc.status).toBe(ImportJobStatus.COMPLETED);
+      expect(mockJobDoc.success_count).toBe(1);
+      expect(mockSkuRepository.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          product_id: existingProduct._id,
+          seller_sku: 'AK-PRD-01',
+        }),
+        expect.anything(),
+      );
+    });
+
+    it('should maintain heartbeat lease and clean up timer on completion (B-DB-02)', async () => {
+      const setIntervalSpy = jest.spyOn(global, 'setInterval');
+      const clearIntervalSpy = jest.spyOn(global, 'clearInterval');
+
+      const buffer = await createWorkbookBuffer([
+        {
+          refId: 'HB-SPU-01',
+          title: 'Sản Phẩm Kiểm Tra Heartbeat Timer',
+          catId: testCategoryId,
+          sku: 'HB-SKU-01',
+          price: 199000,
+        },
+      ]);
+      mockS3Download(buffer);
+
+      const mockJobDoc: any = {
+        _id: testJobId,
+        shop_id: testShopId,
+        status: ImportJobStatus.PENDING,
+        file_url: `imports/shop-${testShopId}/${testJobId}.xlsx`,
+        save: jest.fn().mockResolvedValue(true),
+        error_summary: [],
+      };
+      mockImportJobRepository.findById.mockResolvedValue(mockJobDoc);
+      mockProductRepository.findById.mockResolvedValue(null);
+      mockCategoryRepository.findById.mockResolvedValue({
+        _id: testCategoryId,
+        status: CategoryStatus.ACTIVE,
+      });
+      mockSkuRepository.findBySellerSkus.mockResolvedValue([]);
+
+      await service.processJob(testJobId);
+
+      // Verify setInterval was called with 30s interval
+      expect(setIntervalSpy).toHaveBeenCalledWith(expect.any(Function), 30_000);
+
+      // Verify the interval callback updates locked_until
+      const heartbeatFn = setIntervalSpy.mock.calls.find(
+        (call) => call[1] === 30_000,
+      )?.[0] as () => Promise<void>;
+      expect(heartbeatFn).toBeDefined();
+      await heartbeatFn();
+      expect(mockImportJobRepository.updateHeartbeat).toHaveBeenCalledWith(testJobId, 120_000);
+
+      // Verify clearInterval was called on completion
+      expect(clearIntervalSpy).toHaveBeenCalled();
+
+      setIntervalSpy.mockRestore();
+      clearIntervalSpy.mockRestore();
+    });
+
+    it('should emit product.created outbox event before sku.created outbox events (Review 7 Finding 1)', async () => {
+      const buffer = await createWorkbookBuffer([
+        {
+          refId: 'SPU-ORD-01',
+          title: 'Sản phẩm kiểm tra Outbox sequence',
+          catId: testCategoryId,
+          sku: 'SKU-ORD-001',
+          price: 150000,
+          attributes: { 'Màu sắc': 'Đỏ' },
+        },
+      ]);
+      mockS3Download(buffer);
+
+      const mockJobDoc: any = {
+        _id: testJobId,
+        shop_id: testShopId,
+        status: ImportJobStatus.PENDING,
+        file_url: `imports/shop-${testShopId}/${testJobId}.xlsx`,
+        save: jest.fn().mockResolvedValue(true),
+        error_summary: [],
+      };
+      mockImportJobRepository.findById.mockResolvedValue(mockJobDoc);
+      mockProductRepository.findById.mockResolvedValue(null);
+      mockCategoryRepository.findById.mockResolvedValue({
+        _id: testCategoryId,
+        status: CategoryStatus.ACTIVE,
+      });
+      mockSkuRepository.findBySellerSkus.mockResolvedValue([]);
+
+      const savedEventTypes: string[] = [];
+      mockOutboxRepository.saveEvent.mockImplementation(async (event: any) => {
+        savedEventTypes.push(event.event_type);
+      });
+
+      await service.processJob(testJobId);
+
+      expect(savedEventTypes).toEqual(['product.created', 'sku.created']);
+    });
+
+    it('should update price_summary of existing SPU when imported SKU has lower price', async () => {
+      const existingProductId = '01912f20-0005-7000-8000-000000000005';
+      const buffer = await createWorkbookBuffer([
+        {
+          refId: existingProductId,
+          sku: 'SKU-LOW-PRICE-01',
+          price: 80000,
+          attributes: { 'Màu sắc': 'Vàng' },
+        },
+      ]);
+      mockS3Download(buffer);
+
+      const mockJobDoc: any = {
+        _id: testJobId,
+        shop_id: testShopId,
+        status: ImportJobStatus.PENDING,
+        file_url: `imports/shop-${testShopId}/${testJobId}.xlsx`,
+        save: jest.fn().mockResolvedValue(true),
+        error_summary: [],
+      };
+      mockImportJobRepository.findById.mockResolvedValue(mockJobDoc);
+      mockProductRepository.findById.mockResolvedValue({
+        _id: existingProductId,
+        shop_id: testShopId,
+        title: 'Áo thun có sẵn',
+        primary_category_id: testCategoryId,
+        status: ProductStatus.ACTIVE,
+        price_summary: {
+          base_price: BigInt(120000),
+          sale_price: BigInt(120000),
+        },
+      });
+      mockCategoryRepository.findById.mockResolvedValue({
+        _id: testCategoryId,
+        status: CategoryStatus.ACTIVE,
+      });
+      mockSkuRepository.findBySellerSkus.mockResolvedValue([]);
+
+      await service.processJob(testJobId);
+
+      expect(mockProductRepository.update).toHaveBeenCalledWith(
+        { _id: existingProductId },
+        expect.objectContaining({
+          $set: expect.objectContaining({
+            'price_summary.base_price': BigInt(80000),
+            'price_summary.sale_price': BigInt(80000),
+          }),
+        }),
+        expect.anything(),
+      );
     });
   });
 });

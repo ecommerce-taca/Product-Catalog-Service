@@ -12,6 +12,8 @@ export enum ProductStatus {
   ARCHIVED = 'ARCHIVED',
 }
 
+export const PRODUCT_CODE_REGEX = /^[A-Z0-9_-]{6,32}$/;
+
 @Schema({ _id: false })
 export class ProductPriceSummary {
   @Prop({ type: MongooseSchema.Types.BigInt, required: true })
@@ -40,6 +42,15 @@ export class Product {
     match: UUIDV7_REGEX,
   })
   _id: string;
+
+  @Prop({
+    type: String,
+    trim: true,
+    uppercase: true,
+    default: null,
+    match: /^[A-Z0-9_-]{6,32}$/,
+  })
+  product_code: string | null;
 
   @Prop({
     type: String,
@@ -156,6 +167,15 @@ ProductSchema.virtual('product_id').get(function () {
 ProductSchema.index(
   { shop_id: 1, slug: 1 },
   { unique: true, name: 'idx_products_shop_slug_unique' },
+);
+
+ProductSchema.index(
+  { shop_id: 1, product_code: 1 },
+  {
+    unique: true,
+    partialFilterExpression: { product_code: { $type: 'string' } },
+    name: 'idx_products_shop_product_code_unique_partial',
+  },
 );
 
 ProductSchema.index({ shop_id: 1, status: 1 }, { name: 'idx_products_shop_status' });

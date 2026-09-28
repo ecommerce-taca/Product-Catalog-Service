@@ -3,6 +3,8 @@ import { BaseRepository } from '../../common/repositories/base.repository.interf
 import { CategoryDocument } from '../../database/schemas/category.schema';
 
 export interface CategoryRepositoryPort extends BaseRepository<CategoryDocument> {
+  findByIdOrCode(idOrCode: string, session?: ClientSession): Promise<CategoryDocument | null>;
+  findByCodes(codes: string[], session?: ClientSession): Promise<CategoryDocument[]>;
   findBySlug(slug: string, session?: ClientSession): Promise<CategoryDocument | null>;
   findChildren(
     parentId: string | null,

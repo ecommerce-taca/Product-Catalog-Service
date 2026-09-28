@@ -92,6 +92,7 @@ describe('Consumer Idempotency and Ingestion Pipeline', () => {
       findByShopAndId: jest.fn(),
       findSellerProducts: jest.fn(),
       atomicCasUpdate: jest.fn(),
+      findByIdOrCode: jest.fn(),
     };
 
     const module: TestingModule = await Test.createTestingModule({

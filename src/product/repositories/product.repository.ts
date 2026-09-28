@@ -18,6 +18,25 @@ export class ProductRepository
     super(model);
   }
 
+  async findByIdOrCode(
+    shopId: string,
+    idOrCode: string,
+    session?: ClientSession,
+  ): Promise<ProductDocument | null> {
+    if (!idOrCode || !idOrCode.trim()) {
+      return null;
+    }
+    const trimmed = idOrCode.trim();
+    const query = this.model.findOne({
+      shop_id: shopId,
+      $or: [{ _id: trimmed }, { product_code: trimmed.toUpperCase() }],
+    });
+    if (session) {
+      query.session(session);
+    }
+    return query.exec();
+  }
+
   async findByShopAndSlug(
     shopId: string,
     slug: string,

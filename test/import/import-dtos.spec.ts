@@ -45,22 +45,31 @@ describe('Import DTOs', () => {
       expect(errors[0].constraints?.max).toBeDefined();
     });
 
-    it('should reject invalid UUID in category_ids', async () => {
+    it('should validate valid business codes in category_ids and product_ids', async () => {
       const dto = new GenerateCustomTemplateDto();
-      dto.category_ids = ['invalid-uuid'];
+      dto.category_ids = ['CAT-1001', 'CAT_THOITRANG', '01912f30-7a1b-7c12-9c55-8b1c34a6d920'];
+      dto.product_ids = ['PRD-8K2N9X', '01912f30-7a1b-7c12-9c55-8b1c34a6d921'];
 
       const errors = await validate(dto);
-      expect(errors.length).toBeGreaterThan(0);
-      expect(errors[0].constraints?.isUuid).toBeDefined();
+      expect(errors.length).toBe(0);
     });
 
-    it('should reject invalid UUID in product_ids', async () => {
+    it('should reject invalid format in category_ids', async () => {
       const dto = new GenerateCustomTemplateDto();
-      dto.product_ids = ['invalid-uuid'];
+      dto.category_ids = ['invalid@code!'];
 
       const errors = await validate(dto);
       expect(errors.length).toBeGreaterThan(0);
-      expect(errors[0].constraints?.isUuid).toBeDefined();
+      expect(errors[0].constraints?.matches).toBeDefined();
+    });
+
+    it('should reject invalid format in product_ids', async () => {
+      const dto = new GenerateCustomTemplateDto();
+      dto.product_ids = ['invalid code with spaces'];
+
+      const errors = await validate(dto);
+      expect(errors.length).toBeGreaterThan(0);
+      expect(errors[0].constraints?.matches).toBeDefined();
     });
 
     it('should reject invalid layout_mode', async () => {

@@ -4,6 +4,12 @@ import { Product, ProductDocument } from '../../database/schemas/product.schema'
 import { QueryProductDto } from '../dto/query-product.dto';
 
 export interface ProductRepositoryPort extends BaseRepository<ProductDocument> {
+  findByIdOrCode(
+    shopId: string,
+    idOrCode: string,
+    session?: ClientSession,
+  ): Promise<ProductDocument | null>;
+
   findByShopAndSlug(
     shopId: string,
     slug: string,

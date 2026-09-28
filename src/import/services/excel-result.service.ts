@@ -118,19 +118,26 @@ export class ExcelResultService {
     }
 
     // Group errors by sheet_name:row_index and fallback row_index
-    const sheetErrorMap = new Map<string, string[]>();
-    const fallbackRowErrorMap = new Map<number, string[]>();
+    const sheetErrorMap = new Map<string, Array<{ errorCode: string; errorMessage: string }>>();
+    const fallbackRowErrorMap = new Map<
+      number,
+      Array<{ errorCode: string; errorMessage: string }>
+    >();
 
     if (job.error_summary && job.error_summary.length > 0) {
       for (const err of job.error_summary) {
+        const item = {
+          errorCode: err.error_code || '',
+          errorMessage: err.error_message || '',
+        };
         if (err.sheet_name) {
           const key = `${err.sheet_name.toLowerCase()}:${err.row_index}`;
           const list = sheetErrorMap.get(key) || [];
-          list.push(err.error_message);
+          list.push(item);
           sheetErrorMap.set(key, list);
         }
         const fallbackList = fallbackRowErrorMap.get(err.row_index) || [];
-        fallbackList.push(err.error_message);
+        fallbackList.push(item);
         fallbackRowErrorMap.set(err.row_index, fallbackList);
       }
     }
@@ -138,6 +145,7 @@ export class ExcelResultService {
     // Annotate every data sheet
     for (const worksheet of dataSheets) {
       const headerRow = worksheet.getRow(1);
+      const colMap = this.mapHeaderColumns(headerRow);
       let lastCol = headerRow.actualCellCount || headerRow.cellCount;
       if (lastCol <= 0) {
         lastCol = 10;
@@ -170,6 +178,11 @@ export class ExcelResultService {
         const row = worksheet.getRow(r);
         if (!row.hasValues) continue;
 
+        // Skip empty template/format rows (B-UX-01 / B-LR-02)
+        if (this.isRowEmpty(row, colMap)) {
+          continue;
+        }
+
         const sheetKey = `${worksheet.name.toLowerCase()}:${r}`;
         const rowErrors =
           sheetErrorMap.get(sheetKey) ||
@@ -178,18 +191,40 @@ export class ExcelResultService {
         const errorCell = row.getCell(errorCol);
 
         if (rowErrors && rowErrors.length > 0) {
-          statusCell.value = 'THẤT BẠI (FAILED)';
-          errorCell.value = ExcelFormulaSanitizer.sanitize(rowErrors.join('; '));
+          const isAllWarnings = rowErrors.every((err) => this.isWarningError(err));
+          const combinedMessage = ExcelFormulaSanitizer.sanitize(
+            rowErrors.map((e) => e.errorMessage).join('; '),
+          );
 
-          const lightRedFill: ExcelJS.Fill = {
-            type: 'pattern',
-            pattern: 'solid',
-            fgColor: { argb: 'FFFFC7CE' },
-          };
-          statusCell.fill = lightRedFill;
-          errorCell.fill = lightRedFill;
-          statusCell.font = { color: { argb: 'FF9C0006' } };
-          errorCell.font = { color: { argb: 'FF9C0006' } };
+          if (isAllWarnings) {
+            // BUG-03: Warnings are non-fatal -> SUCCESS WITH WARNING
+            statusCell.value = 'THÀNH CÔNG (CÓ CẢNH BÁO)';
+            errorCell.value = combinedMessage;
+
+            const lightYellowFill: ExcelJS.Fill = {
+              type: 'pattern',
+              pattern: 'solid',
+              fgColor: { argb: 'FFFFEB9C' }, // light yellow
+            };
+            statusCell.fill = lightYellowFill;
+            errorCell.fill = lightYellowFill;
+            statusCell.font = { color: { argb: 'FF9C5700' } }; // dark orange
+            errorCell.font = { color: { argb: 'FF9C5700' } };
+          } else {
+            // Fatal errors -> FAILED
+            statusCell.value = 'THẤT BẠI (FAILED)';
+            errorCell.value = combinedMessage;
+
+            const lightRedFill: ExcelJS.Fill = {
+              type: 'pattern',
+              pattern: 'solid',
+              fgColor: { argb: 'FFFFC7CE' }, // light red
+            };
+            statusCell.fill = lightRedFill;
+            errorCell.fill = lightRedFill;
+            statusCell.font = { color: { argb: 'FF9C0006' } }; // dark red
+            errorCell.font = { color: { argb: 'FF9C0006' } };
+          }
         } else {
           statusCell.value = 'THÀNH CÔNG (SUCCESS)';
           errorCell.value = 'Đã tạo DRAFT';
@@ -225,11 +260,125 @@ export class ExcelResultService {
     return Buffer.from(buffer);
   }
 
+  /**
+   * Helper to check if a row is an empty template row (B-UX-01 / B-LR-02).
+   * Checks 4 core business columns: title, seller_sku, product_ref_id, price.
+   * If all 4 are empty/whitespace/undefined (even if category has prefilled text),
+   * returns true so the row can be skipped without labeling as SUCCESS or FAILED.
+   */
+  isRowEmpty(row: ExcelJS.Row, colMap?: Map<string, number>): boolean {
+    if (!row || !row.hasValues) return true;
+
+    const map =
+      colMap ||
+      (row.worksheet ? this.mapHeaderColumns(row.worksheet.getRow(1)) : new Map<string, number>());
+
+    const getCellVal = (key: string): string => {
+      const colIdx = map.get(key);
+      if (colIdx !== undefined) {
+        return this.getCellValueAsString(row.getCell(colIdx)).trim();
+      }
+      try {
+        const cell = row.getCell(key);
+        return this.getCellValueAsString(cell).trim();
+      } catch {
+        return '';
+      }
+    };
+
+    const titleVal = getCellVal('title');
+    const skuVal = getCellVal('seller_sku');
+    const refIdVal = getCellVal('product_ref_id');
+    const priceVal = getCellVal('price');
+
+    return (
+      titleVal.length === 0 && skuVal.length === 0 && refIdVal.length === 0 && priceVal.length === 0
+    );
+  }
+
+  /**
+   * Helper to distinguish non-fatal warnings from fatal errors (BUG-03).
+   * Identifies 'WARNING:', 'CẢNH BÁO:', or 'MEDIA_DOWNLOAD_FAILED'.
+   */
+  isWarningError(
+    err:
+      | string
+      | {
+          error_code?: string;
+          error_message?: string;
+          errorCode?: string;
+          errorMessage?: string;
+        },
+  ): boolean {
+    if (!err) return false;
+    let text = '';
+    if (typeof err === 'string') {
+      text = err;
+    } else {
+      const code = err.error_code || err.errorCode || '';
+      const msg = err.error_message || err.errorMessage || '';
+      text = `${code} ${msg}`;
+    }
+    const upper = text.toUpperCase();
+    return (
+      upper.includes('WARNING:') ||
+      upper.includes('CẢNH BÁO:') ||
+      upper.includes('MEDIA_DOWNLOAD_FAILED')
+    );
+  }
+
+  mapHeaderColumns(headerRow?: ExcelJS.Row): Map<string, number> {
+    const colMap = new Map<string, number>();
+    if (!headerRow) return colMap;
+
+    headerRow.eachCell((cell, colNumber) => {
+      const headerText = this.getCellValueAsString(cell).trim();
+      const lower = headerText.toLowerCase();
+
+      if (lower.includes('tham chiếu') || lower.includes('product_ref_id') || lower === 'ref_id') {
+        colMap.set('product_ref_id', colNumber);
+      } else if (lower.includes('tên sản phẩm') || lower.includes('title')) {
+        colMap.set('title', colNumber);
+      } else if (lower.includes('mã danh mục') || lower.includes('category_id')) {
+        colMap.set('category_id', colNumber);
+      } else if (lower.includes('mã sku') || lower.includes('seller_sku') || lower === 'sku') {
+        colMap.set('seller_sku', colNumber);
+      } else if (
+        (lower.includes('giá bán') || lower.includes('price')) &&
+        !lower.includes('niêm yết') &&
+        !lower.includes('gốc') &&
+        !lower.includes('original')
+      ) {
+        colMap.set('price', colNumber);
+      }
+    });
+
+    return colMap;
+  }
+
+  getCellValueAsString(cell: ExcelJS.Cell | null | undefined): string {
+    if (!cell || cell.value === null || cell.value === undefined) return '';
+    if (typeof cell.value === 'object') {
+      if ('richText' in cell.value && Array.isArray((cell.value as any).richText)) {
+        return (cell.value as any).richText.map((t: any) => t.text).join('');
+      }
+      if ('text' in cell.value) {
+        return String((cell.value as any).text);
+      }
+      if ('result' in cell.value) {
+        return String((cell.value as any).result);
+      }
+    }
+    return String(cell.value);
+  }
+
   private async generateFallbackBuffer(job: ImportJobDocument): Promise<Buffer> {
     const workbook = new ExcelJS.Workbook();
     const sheet = workbook.addWorksheet('Báo cáo kết quả');
 
+    // BUG-04: Include Tên Sheet (sheet_name) for multi-sheet error reporting
     sheet.columns = [
+      { header: 'Tên Sheet', key: 'sheet_name', width: 22 },
       { header: 'Dòng', key: 'row_index', width: 10 },
       { header: 'Mã tham chiếu (product_ref_id)', key: 'product_ref_id', width: 28 },
       { header: 'Mã SKU (seller_sku)', key: 'seller_sku', width: 24 },
@@ -249,6 +398,7 @@ export class ExcelResultService {
     if (job.error_summary && job.error_summary.length > 0) {
       for (const err of job.error_summary) {
         const addedRow = sheet.addRow({
+          sheet_name: ExcelFormulaSanitizer.sanitize(err.sheet_name || ''),
           row_index: err.row_index,
           product_ref_id: ExcelFormulaSanitizer.sanitize(err.product_ref_id),
           seller_sku: ExcelFormulaSanitizer.sanitize(err.seller_sku || ''),

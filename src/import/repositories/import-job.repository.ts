@@ -76,9 +76,18 @@ export class MongoImportJobRepository
   }
 
   async reclaimStaleJobs(now: Date = new Date(), session?: ClientSession): Promise<number> {
+    const stalePendingCutoff = new Date(now.getTime() - 15 * 60 * 1000);
     const filter: FilterQuery<ImportJobDocument> = {
-      status: ImportJobStatus.PROCESSING,
-      locked_until: { $lte: now },
+      $or: [
+        {
+          status: ImportJobStatus.PROCESSING,
+          locked_until: { $lte: now },
+        },
+        {
+          status: ImportJobStatus.PENDING,
+          created_at: { $lte: stalePendingCutoff },
+        },
+      ],
     };
 
     const update: UpdateQuery<ImportJobDocument> = {
@@ -91,7 +100,8 @@ export class MongoImportJobRepository
           row_index: 0,
           product_ref_id: 'SYSTEM',
           error_code: 'PRODUCT_IMPORT_WORKER_TIMEOUT',
-          error_message: 'Tiến trình xử lý bị quá hạn (worker heartbeat timeout)',
+          error_message:
+            'Tiến trình xử lý bị quá hạn (worker heartbeat timeout hoặc gián đoạn hệ thống)',
         },
       },
     };

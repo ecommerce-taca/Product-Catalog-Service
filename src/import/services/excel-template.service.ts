@@ -46,7 +46,10 @@ export class ExcelTemplateService {
   ): Promise<TemplatePresignedResult> {
     if (dto.category_ids && dto.category_ids.length > 0) {
       for (const catId of dto.category_ids) {
-        const category = await this.categoryRepository.findById(catId);
+        let category = await this.categoryRepository.findById(catId);
+        if (!category && this.categoryRepository.findByIdOrCode) {
+          category = await this.categoryRepository.findByIdOrCode(catId);
+        }
         if (!category || category.status !== CategoryStatus.ACTIVE) {
           throw new BadRequestException({
             code: 'PRODUCT_CATEGORY_INVALID',
@@ -122,7 +125,10 @@ export class ExcelTemplateService {
     const categories: CategoryDocument[] = [];
     if (dto.category_ids && dto.category_ids.length > 0) {
       for (const catId of dto.category_ids) {
-        const cat = await this.categoryRepository.findById(catId);
+        let cat = await this.categoryRepository.findById(catId);
+        if (!cat && this.categoryRepository.findByIdOrCode) {
+          cat = await this.categoryRepository.findByIdOrCode(catId);
+        }
         if (!cat || cat.status !== CategoryStatus.ACTIVE) {
           throw new BadRequestException({
             code: 'PRODUCT_CATEGORY_INVALID',
@@ -137,11 +143,17 @@ export class ExcelTemplateService {
     const prefillProducts: ProductDocument[] = [];
     if (dto.product_ids && dto.product_ids.length > 0 && this.productRepository && shopId) {
       for (const prodId of dto.product_ids) {
-        const prod = await this.productRepository.findByShopAndId(shopId, prodId);
+        let prod = await this.productRepository.findByShopAndId(shopId, prodId);
+        if (!prod && this.productRepository.findByIdOrCode) {
+          prod = await this.productRepository.findByIdOrCode(shopId, prodId);
+        }
         if (prod) {
           prefillProducts.push(prod);
           if (categories.length === 0 && prod.primary_category_id) {
-            const cat = await this.categoryRepository.findById(prod.primary_category_id);
+            let cat = await this.categoryRepository.findById(prod.primary_category_id);
+            if (!cat && this.categoryRepository.findByIdOrCode) {
+              cat = await this.categoryRepository.findByIdOrCode(prod.primary_category_id);
+            }
             if (
               cat &&
               cat.status === CategoryStatus.ACTIVE &&
@@ -209,7 +221,7 @@ export class ExcelTemplateService {
         sheet.getColumn(8).numFmt = '#,##0';
         sheet.getColumn(9).numFmt = '#,##0';
 
-        const friendlyCatValue = `${cat.name} [${cat._id}]`;
+        const friendlyCatValue = `${cat.name} [${cat.category_code || cat._id}]`;
 
         // Prepopulate existing SPU products if any belong to this category
         const catProducts = prefillProducts.filter((p) => p.primary_category_id === cat._id);
@@ -217,8 +229,12 @@ export class ExcelTemplateService {
         if (catProducts.length > 0) {
           for (const prod of catProducts) {
             const row = sheet.getRow(currentRow++);
-            row.getCell(1).value = ExcelFormulaSanitizer.sanitize(prod.slug || prod._id);
-            row.getCell(2).value = ExcelFormulaSanitizer.sanitize(prod.title);
+            row.getCell(1).value = ExcelFormulaSanitizer.sanitize(
+              prod.product_code || prod.slug || prod._id,
+            );
+            row.getCell(2).value = ExcelFormulaSanitizer.sanitize(
+              `${prod.title} [${prod.product_code || prod._id}]`,
+            );
             row.getCell(3).value = ExcelFormulaSanitizer.sanitize(friendlyCatValue);
             row.getCell(4).value = ExcelFormulaSanitizer.sanitize(prod.description || '');
             row.getCell(5).value = ExcelFormulaSanitizer.sanitize(prod.brand || '');
@@ -285,14 +301,18 @@ export class ExcelTemplateService {
 
       if (categories.length === 1) {
         const cat = categories[0];
-        const friendlyCatValue = `${cat.name} [${cat._id}]`;
+        const friendlyCatValue = `${cat.name} [${cat.category_code || cat._id}]`;
 
         let currentRow = 2;
         if (prefillProducts.length > 0) {
           for (const prod of prefillProducts) {
             const row = sheet1.getRow(currentRow++);
-            row.getCell(1).value = ExcelFormulaSanitizer.sanitize(prod.slug || prod._id);
-            row.getCell(2).value = ExcelFormulaSanitizer.sanitize(prod.title);
+            row.getCell(1).value = ExcelFormulaSanitizer.sanitize(
+              prod.product_code || prod.slug || prod._id,
+            );
+            row.getCell(2).value = ExcelFormulaSanitizer.sanitize(
+              `${prod.title} [${prod.product_code || prod._id}]`,
+            );
             row.getCell(3).value = ExcelFormulaSanitizer.sanitize(friendlyCatValue);
             row.getCell(4).value = ExcelFormulaSanitizer.sanitize(prod.description || '');
             row.getCell(5).value = ExcelFormulaSanitizer.sanitize(prod.brand || '');
@@ -320,7 +340,9 @@ export class ExcelTemplateService {
         });
       } else if (categories.length > 1) {
         // Dropdown selection for multiple categories in column 3
-        const catDropdownFormula = [`"${categories.map((c) => `${c.name} [${c._id}]`).join(',')}"`];
+        const catDropdownFormula = [
+          `"${categories.map((c) => `${c.name} [${c.category_code || c._id}]`).join(',')}"`,
+        ];
         for (let r = 2; r <= rowCount + 1; r++) {
           sheet1.getCell(r, 3).dataValidation = {
             type: 'list',
@@ -345,7 +367,9 @@ export class ExcelTemplateService {
 
     // Append Example & Guidance worksheets
     const sampleCat = categories[0];
-    const sampleCatFriendly = sampleCat ? `${sampleCat.name} [${sampleCat._id}]` : undefined;
+    const sampleCatFriendly = sampleCat
+      ? `${sampleCat.name} [${sampleCat.category_code || sampleCat._id}]`
+      : undefined;
     this.appendExampleWorksheet(workbook, sampleCatFriendly);
     await this.appendGuidanceWorksheet(workbook);
 
@@ -442,16 +466,16 @@ export class ExcelTemplateService {
     sheetExample.getColumn(8).numFmt = '#,##0';
     sheetExample.getColumn(9).numFmt = '#,##0';
 
-    const catVal = sampleCatFriendly || 'Thời Trang Nam [01912f20-0000-7000-8000-000000000001]';
+    const catVal = sampleCatFriendly || 'Áo Thun Nam [CAT-1001]';
 
     // SPU 1: AO-POLO-NAM (4 biến thể: Trắng-M, Trắng-L, Đen-M, Đen-L), giá 250.000
     sheetExample.addRow({
       product_ref_id: 'AO-POLO-NAM',
-      title: 'Áo Polo Nam Thể Thao Phối Viền Co Giãn Thoáng Khí',
+      title: 'Áo Polo Coolmate [PRD-8K2N9X]',
       category_id: catVal,
       description:
         'Chất liệu vải cá sấu mè cao cấp, co giãn 4 chiều, thấm hút mồ hôi tối đa, thoáng khí giữ form chuẩn.',
-      brand: 'Taca Fashion',
+      brand: 'Coolmate',
       image_urls:
         'https://images.unsplash.com/photo-1581655353564-df123a1eb820?w=800,https://images.unsplash.com/photo-1586363104862-3a5e2ab60d99?w=800',
       seller_sku: 'POLO-NAM-TRANG-M',
@@ -510,7 +534,7 @@ export class ExcelTemplateService {
     // SPU 2: BALO-CHONG-NUOC (1 biến thể đơn duy nhất: Đen Carbon - Tiêu chuẩn 45L), giá 450.000
     sheetExample.addRow({
       product_ref_id: 'BALO-CHONG-NUOC',
-      title: 'Balo Du Lịch Chống Nước Đa Năng 45L Có Ngăn Laptop',
+      title: 'Balo Du Lịch Chống Nước Đa Năng 45L [PRD-BALO45L]',
       category_id: catVal,
       description:
         'Vải Oxford cao cấp chống nước tuyệt đối, quai đeo đệm thoáng khí, ngăn laptop 15.6 inch.',
@@ -527,7 +551,7 @@ export class ExcelTemplateService {
     // SPU 3: GIAY-SNEAKER (3 biến thể: Trắng-39, Trắng-40, Trắng-41), giá 500.000
     sheetExample.addRow({
       product_ref_id: 'GIAY-SNEAKER',
-      title: 'Giày Sneaker Thể Thao Nam Nữ Phong Cách Hàn Quốc',
+      title: 'Giày Sneaker Thể Thao Nam Nữ [PRD-SNK001]',
       category_id: catVal,
       description:
         'Đế cao su lưu hóa siêu êm, thân vải canvas thoáng khí, thiết kế trẻ trung năng động.',
@@ -581,6 +605,7 @@ export class ExcelTemplateService {
     sheetGuide.columns = [
       { header: 'Mục / Trường dữ liệu', key: 'section', width: 35 },
       { header: 'Quy tắc & Hướng dẫn chi tiết', key: 'rule', width: 55 },
+      { header: 'Mã Danh Mục Ngắn (category_code)', key: 'category_code', width: 30 },
       { header: 'Ví dụ minh họa / Ghi chú', key: 'example', width: 45 },
     ];
 
@@ -602,49 +627,59 @@ export class ExcelTemplateService {
       {
         section: '★ NGUYÊN TẮC VÀNG PHÂN CỤM BIẾN THỂ',
         rule: 'CÙNG Mã tham chiếu (product_ref_id) = Các biến thể của cùng 1 sản phẩm (nhiều màu sắc, kích cỡ). ĐỔI Mã tham chiếu = Bắt đầu một sản phẩm mới hoàn toàn.',
+        category_code: '',
         example:
           'Xem sheet "Ví dụ điền mẫu": 4 dòng AO-POLO-NAM (1 SPU), 1 dòng BALO-CHONG-NUOC (1 SPU), 3 dòng GIAY-SNEAKER (1 SPU).',
       },
       {
         section: '1. Dòng SPU cha (Dòng đầu tiên)',
         rule: 'Dòng đầu tiên của mỗi nhóm Mã tham chiếu bắt buộc điền đầy đủ: Tên sản phẩm, Mã danh mục, Mô tả sản phẩm, Thương hiệu, Danh sách URL ảnh.',
+        category_code: '',
         example:
           'Các dòng tiếp theo của cùng Mã tham chiếu để trống các cột cha; hệ thống tự động kế thừa.',
       },
       {
         section: '2. Các dòng SKU biến thể tiếp theo',
         rule: 'Các dòng tiếp theo CÙNG Mã tham chiếu chỉ cần điền: Mã SKU, Giá bán, Giá niêm yết, Mã vạch và các thuộc tính biến thể (Màu sắc, Size). CỘT TÊN VÀ MÔ TẢ ĐỂ TRỐNG.',
+        category_code: '',
         example: 'Dòng 2, 3, 4 trong sheet Ví dụ để trống Tên & Mô tả; chỉ điền SKU và Màu/Size.',
       },
       {
         section: '3. Sản phẩm đơn (1 biến thể duy nhất)',
         rule: 'Chỉ cần điền 1 dòng duy nhất với Mã tham chiếu riêng biệt và điền đầy đủ cả thông tin cha lẫn SKU/giá bán.',
+        category_code: '',
         example: 'Xem ví dụ BALO-CHONG-NUOC trong sheet "Ví dụ điền mẫu".',
       },
       {
         section: '4. Số dòng & Tự động bỏ qua dòng trống',
         rule: 'Mặc định template tạo sẵn 100 dòng trống đã format chuẩn viền, dropdown và prefill category. Người bán KHÔNG cần tự tính hay điền hết 100 dòng. Các dòng trống không điền sẽ được worker tự động bỏ qua an toàn.',
+        category_code: '',
         example:
           'Điền 8 dòng dữ liệu, 92 dòng còn lại để trống: hệ thống xử lý chính xác 8 dòng, không báo lỗi.',
       },
       {
-        section: '5. Định dạng Tên Danh Mục Thân Thiện',
-        rule: 'Hệ thống hỗ trợ hiển thị danh mục dạng "Tên Danh Mục [ID]". Người bán có thể chọn từ dropdown hoặc điền trực tiếp.',
-        example: 'Thời Trang Nam [01912f20-0000-7000-8000-000000000001]',
+        section: '5. Định dạng Tên Danh Mục Thân Thiện & Mã Ngắn',
+        rule: 'Hệ thống hỗ trợ hiển thị danh mục dạng "Tên Danh Mục [Mã]". Người bán có thể dùng mã ngắn (category_code ví dụ: CAT-1001) hoặc mã UUID trong ngoặc vuông "[...]", hoặc chọn trực tiếp từ dropdown.',
+        category_code: 'CAT-1001',
+        example:
+          'Áo Thun Nam [CAT-1001] hoặc Thời Trang Nam [01912f20-0000-7000-8000-000000000001]',
       },
       {
         section: '6. Bổ sung SKU cho sản phẩm đã có',
-        rule: 'Điền mã ID (UUID) hoặc slug của sản phẩm đã có vào cột "Mã tham chiếu sản phẩm (*)". Hệ thống sẽ tự động gán thêm các SKU mới vào sản phẩm đó.',
-        example: '01912f30-0000-7000-8000-000000000001 hoặc ao-polo-nam-1234',
+        rule: 'Điền mã ngắn sản phẩm (product_code ví dụ: PRD-8K2N9X), mã UUID hoặc slug của sản phẩm đã có vào cột "Mã tham chiếu sản phẩm (*)". Hệ thống sẽ tự động gán thêm các SKU mới vào sản phẩm đó.',
+        category_code: '',
+        example: 'PRD-8K2N9X hoặc 01912f30-0000-7000-8000-000000000001 hoặc ao-polo-nam-1234',
       },
       {
         section: '7. Quy tắc SKU & Tiền tệ VND',
         rule: 'Mỗi dòng đại diện cho 1 SKU. Giá bán và Giá niêm yết là số nguyên dương VND >= 1.000. Mã SKU người bán phải là duy nhất trên toàn shop.',
+        category_code: '',
         example: '250000, 350000. Không điền 250.000đ hay ký tự $',
       },
       {
         section: '8. Giới hạn hệ thống',
         rule: 'Mỗi tệp nạp tối đa 100 sản phẩm (SPU), tối đa 200 dòng SKU, dung lượng tệp <= 2MB.',
+        category_code: '',
         example: 'Tất cả sản phẩm mới tạo đều ở trạng thái DRAFT an toàn.',
       },
     ];
@@ -653,11 +688,12 @@ export class ExcelTemplateService {
       sheetGuide.addRow(item);
     });
 
-    sheetGuide.addRow({ section: '', rule: '', example: '' });
+    sheetGuide.addRow({ section: '', rule: '', category_code: '', example: '' });
 
     const catHeaderRow = sheetGuide.addRow({
       section: '--- DANH SÁCH DANH MỤC THAM KHẢO ---',
-      rule: 'Tên & Mã danh mục (category_id UUID)',
+      rule: 'Mã UUID (category_id)',
+      category_code: 'Mã Danh Mục Ngắn (category_code)',
       example: 'Đường dẫn phân cấp',
     });
     catHeaderRow.font = { bold: true, color: { argb: 'FF1F497D' } };
@@ -671,8 +707,9 @@ export class ExcelTemplateService {
 
       categories.forEach((cat: CategoryDocument) => {
         sheetGuide.addRow({
-          section: `${cat.name} [${cat._id}]`,
+          section: `${cat.name} [${cat.category_code || cat._id}]`,
           rule: cat._id,
+          category_code: cat.category_code || '---',
           example: cat.path,
         });
       });
