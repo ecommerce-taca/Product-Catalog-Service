@@ -1,4 +1,4 @@
-import { ForbiddenException, HttpStatus } from '@nestjs/common';
+import { ConflictException, ForbiddenException, HttpStatus } from '@nestjs/common';
 import { Test, TestingModule } from '@nestjs/testing';
 import { Response } from 'express';
 
@@ -52,6 +52,7 @@ describe('SellerImportController', () => {
 
   const mockImportJobRepository = {
     findActiveJobByShop: jest.fn(),
+    reclaimStaleJobs: jest.fn().mockResolvedValue(0),
     create: jest.fn(),
   };
 
@@ -198,6 +199,89 @@ describe('SellerImportController', () => {
       await expect(
         controller.downloadTemplate(customDto, '', { ...activeActor, shopScope: undefined }, res),
       ).rejects.toThrow(ForbiddenException);
+    });
+  });
+
+  describe('POST /seller/products/import (uploadImportFile)', () => {
+    const validFilePayload = {
+      originalname: 'products.xlsx',
+      mimetype: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      size: 1024,
+      buffer: Buffer.from([0x50, 0x4b, 0x03, 0x04, 0x00, 0x00]), // PK zip magic header
+    };
+
+    it('should successfully upload import file, create job, and return 202 ACCEPTED', async () => {
+      mockShopSnapshotRepository.findByShopId.mockResolvedValue({
+        shop_id: activeActor.shopScope,
+        shop_status: ShopStatus.ACTIVE,
+      });
+      mockImportJobRepository.findActiveJobByShop.mockResolvedValue(null);
+      mockImportJobRepository.create.mockResolvedValue({
+        _id: '01912f30-0001-7000-8000-000000000001',
+        created_at: new Date(),
+      });
+
+      const result = await controller.uploadImportFile(
+        validFilePayload,
+        activeActor.shopScope!,
+        activeActor,
+      );
+
+      expect(mockImportJobRepository.reclaimStaleJobs).toHaveBeenCalled();
+      expect(mockImportJobRepository.findActiveJobByShop).toHaveBeenCalledWith(
+        activeActor.shopScope,
+      );
+      expect(mockS3StorageService.uploadBuffer).toHaveBeenCalled();
+      expect(mockImportJobRepository.create).toHaveBeenCalled();
+      expect(result).toEqual(
+        expect.objectContaining({
+          status: 'PENDING',
+          message: expect.stringContaining('đã được tiếp nhận'),
+        }),
+      );
+    });
+
+    it('should throw 409 ConflictException when active job is found prior to creation', async () => {
+      mockShopSnapshotRepository.findByShopId.mockResolvedValue({
+        shop_id: activeActor.shopScope,
+        shop_status: ShopStatus.ACTIVE,
+      });
+      mockImportJobRepository.findActiveJobByShop.mockResolvedValue({
+        _id: '01912f30-0001-7000-8000-000000000001',
+        status: 'PROCESSING',
+      });
+
+      await expect(
+        controller.uploadImportFile(validFilePayload, activeActor.shopScope!, activeActor),
+      ).rejects.toThrow(ConflictException);
+
+      expect(mockImportJobRepository.create).not.toHaveBeenCalled();
+    });
+
+    it('should catch MongoDB E11000 duplicate key on active job index and throw 409 ConflictException (B-DB-03 / SF-ARCH-03)', async () => {
+      mockShopSnapshotRepository.findByShopId.mockResolvedValue({
+        shop_id: activeActor.shopScope,
+        shop_status: ShopStatus.ACTIVE,
+      });
+      mockImportJobRepository.findActiveJobByShop.mockResolvedValue(null);
+      // Simulate race condition where concurrent request created an active job first
+      const mongoError = new Error(
+        'E11000 duplicate key error collection: import_jobs index: idx_import_jobs_active_shop_unique dup key: { shop_id: "01912f20-0001-7000-8000-000000000001" }',
+      );
+      (mongoError as any).code = 11000;
+      mockImportJobRepository.create.mockRejectedValue(mongoError);
+
+      try {
+        await controller.uploadImportFile(validFilePayload, activeActor.shopScope!, activeActor);
+        fail('Expected ConflictException was not thrown');
+      } catch (err: any) {
+        expect(err).toBeInstanceOf(ConflictException);
+        const response = err.getResponse();
+        expect(response).toEqual({
+          code: 'PRODUCT_IMPORT_JOB_RUNNING',
+          message: 'Gian hàng đang có tiến trình nhập sản phẩm đang xử lý. Vui lòng chờ hoàn tất.',
+        });
+      }
     });
   });
 });

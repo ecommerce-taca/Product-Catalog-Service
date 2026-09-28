@@ -270,19 +270,35 @@ export class SellerImportController {
       file.mimetype || 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     );
 
-    // 7. Create PENDING job in MongoDB
-    const job = await this.importJobRepo.create({
-      _id: jobId,
-      shop_id: actorShopScope,
-      actor_user_id: actor?.userId || '01910000-0000-7000-8000-000000000000',
-      status: ImportJobStatus.PENDING,
-      file_url: s3Key,
-      total_rows: null,
-      processed_rows: 0,
-      success_count: 0,
-      error_count: 0,
-      error_summary: [],
-    });
+    // 7. Create PENDING job in MongoDB (with E11000 race-condition handling - B-DB-03 / SF-ARCH-03)
+    let job;
+    try {
+      job = await this.importJobRepo.create({
+        _id: jobId,
+        shop_id: actorShopScope,
+        actor_user_id: actor?.userId || '01910000-0000-7000-8000-000000000000',
+        status: ImportJobStatus.PENDING,
+        file_url: s3Key,
+        total_rows: null,
+        processed_rows: 0,
+        success_count: 0,
+        error_count: 0,
+        error_summary: [],
+      });
+    } catch (err: any) {
+      if (
+        err?.code === 11000 ||
+        err?.message?.includes('11000') ||
+        err?.message?.includes('idx_import_jobs_active_shop_unique') ||
+        err?.message?.includes('idx_import_jobs_shop_active_unique')
+      ) {
+        throw new ConflictException({
+          code: 'PRODUCT_IMPORT_JOB_RUNNING',
+          message: 'Gian hàng đang có tiến trình nhập sản phẩm đang xử lý. Vui lòng chờ hoàn tất.',
+        });
+      }
+      throw err;
+    }
 
     // 8. Trigger background worker asynchronously
     setImmediate(() => {
