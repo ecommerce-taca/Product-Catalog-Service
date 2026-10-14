@@ -1,0 +1,67 @@
+name: CI
+
+# Trigger: mọi PR + push lên main/develop đều chạy test & build.
+# Push image: main → latest + <sha>; develop → develop + develop-<sha> (môi trường K8S dev).
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  test:
+    name: Lint · Typecheck · Test · Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+      - run: npm run lint
+      # typecheck trước (rẻ + nhanh) để fail sớm trước khi chạy test
+      - run: npx tsc --noEmit -p tsconfig.json
+      # chỉ unit test: *.int-spec.ts cần MongoDB/S3 thật, không chạy trên runner CI
+      - run: npx jest --testPathIgnorePatterns '\.int-spec\.ts$'
+      - run: npm run build
+
+  docker:
+    name: Build & Push Docker image
+    needs: test
+    # Push image chỉ khi push lên main (latest + sha) hoặc develop (develop + develop-sha, dùng cho K8S dev).
+    # PR không push để tránh image tràn Docker Hub.
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Đăng nhập Docker Hub bằng secret (không hardcode credential)
+      - uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      # main → latest + <sha>; develop → develop + develop-<sha> (để rollback được theo SHA)
+      - name: Compute image tags
+        id: tags
+        env:
+          IMAGE: ${{ secrets.DOCKERHUB_USERNAME }}/product-catalog-service
+        run: |
+          if [ "${GITHUB_REF}" = "refs/heads/main" ]; then
+            printf 'list<<EOF\n%s:latest\n%s:%s\nEOF\n' "$IMAGE" "$IMAGE" "$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+          else
+            printf 'list<<EOF\n%s:develop\n%s:develop-%s\nEOF\n' "$IMAGE" "$IMAGE" "$GITHUB_SHA" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.tags.outputs.list }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
