@@ -4,6 +4,7 @@ import {
   DeleteObjectsCommand,
   GetObjectCommand,
   HeadObjectCommand,
+  HeadObjectCommandOutput,
   PutObjectCommand,
   S3Client,
 } from '@aws-sdk/client-s3';
@@ -38,6 +39,8 @@ export class S3StorageService {
   readonly forcePathStyle: boolean;
   readonly signedUrlTtl: number;
   readonly publicBaseUrl?: string;
+  readonly verifyAttempts: number;
+  readonly verifyRetryDelayMs: number;
 
   constructor(private readonly configService: ConfigService) {
     const config = this.configService.get<StorageConfig>('storage');
@@ -52,6 +55,8 @@ export class S3StorageService {
       config?.signedUrlTtl || parseInt(process.env.MEDIA_SIGNED_URL_TTL || '600', 10);
     this.publicBaseUrl =
       config?.publicBaseUrl || process.env.CDN_BASE_URL || process.env.AWS_S3_PUBLIC_URL;
+    this.verifyAttempts = Math.max(1, config?.verifyAttempts ?? 4);
+    this.verifyRetryDelayMs = Math.max(0, config?.verifyRetryDelayMs ?? 500);
 
     this.s3Client = new S3Client({
       region: this.region,
@@ -324,6 +329,32 @@ export class S3StorageService {
   }
 
   /**
+   * HEAD có thử lại: storage S3-compatible (rclone trên Google Drive...) có thể chưa thấy object
+   * ngay sau khi client PUT xong, hoặc trả lỗi tạm thời ở request đầu. Chỉ thử lại khi HEAD lỗi;
+   * lệch size/sha256 là kết quả cuối cùng, không thử lại.
+   */
+  private async headWithRetry(
+    command: HeadObjectCommand,
+    key: string,
+  ): Promise<HeadObjectCommandOutput> {
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= this.verifyAttempts; attempt++) {
+      try {
+        return await this.s3Client.send(command);
+      } catch (error: unknown) {
+        lastError = error;
+        if (attempt < this.verifyAttempts) {
+          this.logger.debug(
+            `HEAD ${key} failed (attempt ${attempt}/${this.verifyAttempts}), retrying`,
+          );
+          await new Promise((resolve) => setTimeout(resolve, this.verifyRetryDelayMs * attempt));
+        }
+      }
+    }
+    throw lastError;
+  }
+
+  /**
    * Verifies that the object was successfully uploaded to S3/MinIO via HEAD request.
    */
   async verifyObjectUploaded(
@@ -337,7 +368,7 @@ export class S3StorageService {
         Bucket: this.bucket,
         Key: cleanKey,
       });
-      const response = await this.s3Client.send(command);
+      const response = await this.headWithRetry(command, cleanKey);
       const actualSize = response.ContentLength ?? 0;
       const etag = response.ETag?.replace(/"/g, '') ?? '';
 
