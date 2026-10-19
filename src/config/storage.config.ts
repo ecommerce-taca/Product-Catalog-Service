@@ -9,6 +9,10 @@ export interface StorageConfig {
   forcePathStyle: boolean;
   signedUrlTtl: number;
   publicBaseUrl?: string;
+  /** Số lần HEAD khi xác nhận upload (storage có thể chưa thấy object ngay sau PUT) */
+  verifyAttempts?: number;
+  /** Độ trễ cơ sở giữa các lần HEAD, tăng tuyến tính theo lần thử */
+  verifyRetryDelayMs?: number;
 }
 
 export default registerAs('storage', (): StorageConfig => ({
@@ -20,4 +24,6 @@ export default registerAs('storage', (): StorageConfig => ({
   forcePathStyle: process.env.AWS_S3_FORCE_PATH_STYLE !== 'false',
   signedUrlTtl: parseInt(process.env.MEDIA_SIGNED_URL_TTL || '600', 10),
   publicBaseUrl: process.env.CDN_BASE_URL || process.env.AWS_S3_PUBLIC_URL,
+  verifyAttempts: parseInt(process.env.MEDIA_VERIFY_ATTEMPTS || '4', 10),
+  verifyRetryDelayMs: parseInt(process.env.MEDIA_VERIFY_RETRY_DELAY_MS || '500', 10),
 }));

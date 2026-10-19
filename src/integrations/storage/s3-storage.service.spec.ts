@@ -16,6 +16,8 @@ describe('S3StorageService', () => {
     forcePathStyle: true,
     signedUrlTtl: 600,
     publicBaseUrl: undefined,
+    verifyAttempts: 3,
+    verifyRetryDelayMs: 0,
   };
 
   beforeEach(async () => {
@@ -121,11 +123,35 @@ describe('S3StorageService', () => {
     it('should return verified: false when HEAD object throws NotFound or NoSuchKey', async () => {
       const notFoundError = new Error('NotFound');
       notFoundError.name = 'NotFound';
-      mockSend.mockRejectedValueOnce(notFoundError);
+      mockSend.mockRejectedValue(notFoundError);
 
       const result = await service.verifyObjectUploaded('nonexistent.webp');
 
       expect(result.verified).toBe(false);
+      expect(mockSend).toHaveBeenCalledTimes(3);
+    });
+
+    it('should retry HEAD and verify when the object becomes visible after a transient error', async () => {
+      const transient = new Error('UnknownError');
+      transient.name = 'UnknownError';
+      mockSend.mockRejectedValueOnce(transient).mockResolvedValueOnce({
+        ContentLength: 1024,
+        ETag: '"etag-retry"',
+      });
+
+      const result = await service.verifyObjectUploaded('late.webp', undefined, 1024);
+
+      expect(result.verified).toBe(true);
+      expect(mockSend).toHaveBeenCalledTimes(2);
+    });
+
+    it('should not retry when size mismatches (final answer)', async () => {
+      mockSend.mockResolvedValueOnce({ ContentLength: 2048 });
+
+      const result = await service.verifyObjectUploaded('test.webp', undefined, 1024);
+
+      expect(result.verified).toBe(false);
+      expect(mockSend).toHaveBeenCalledTimes(1);
     });
   });
 
