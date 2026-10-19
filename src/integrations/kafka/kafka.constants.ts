@@ -1,6 +1,7 @@
 export const TOPIC_CATALOG_EVENTS = 'catalog.events.v1';
 export const TOPIC_INVENTORY_EVENTS = 'inventory.events.v1';
-export const TOPIC_AUTH_EVENTS = 'auth.events.v1';
+// Auth User phát shop/KYC event trên shop.events.v1 (auth-user-docs/docs/lld/auth-user.md §6)
+export const TOPIC_SHOP_EVENTS = 'shop.events.v1';
 export const TOPIC_RATING_EVENTS = 'rating.events.v1';
 export const TOPIC_DLQ = 'product-catalog.events.dlq.v1';
 
