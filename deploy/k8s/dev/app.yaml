@@ -34,7 +34,9 @@ spec:
             - name: AWS_SECRET_ACCESS_KEY
               valueFrom: { secretKeyRef: { name: taca-catalog-s3, key: AWS_SECRET_ACCESS_KEY, optional: true } }
             - { name: AWS_S3_BUCKET, value: taca-product-media-dev }
-            - { name: AWS_S3_ENDPOINT, value: "http://rclone-s3.rclone.svc:8080" }
+            # Endpoint public: presigned upload URL do catalog ký phải truy cập được từ trình duyệt seller
+            # (rclone serve s3 bật --allow-origin=https://taca.thanhtanengineer.id.vn cho CORS)
+            - { name: AWS_S3_ENDPOINT, value: "https://s3.thantancloud.id.vn" }
             # Ảnh public qua API Gateway: Kong /media/<key> → rclone serve http (chỉ đọc) → Drive folder của bucket
             - { name: AWS_S3_PUBLIC_URL, value: "https://taca.thanhtanengineer.id.vn/media" }
             - { name: AWS_S3_FORCE_PATH_STYLE, value: "true" }
