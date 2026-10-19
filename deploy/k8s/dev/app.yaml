@@ -1,0 +1,60 @@
+# Manifest môi trường K8S dev. Job deploy-dev trong ci.yml thay __IMAGE__ bằng image develop-<sha> rồi kubectl apply.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: product-catalog-service
+  labels: { app: product-catalog-service, part-of: taca }
+spec:
+  replicas: 1
+  revisionHistoryLimit: 3
+  selector:
+    matchLabels: { app: product-catalog-service }
+  template:
+    metadata:
+      labels: { app: product-catalog-service, part-of: taca }
+    spec:
+      containers:
+        - name: app
+          image: __IMAGE__
+          ports:
+            - { name: http, containerPort: 3000 }
+          env:
+            - { name: NODE_ENV, value: production }
+            - { name: PORT, value: "3000" }
+            - { name: GLOBAL_PREFIX, value: api/v1 }
+            - name: MONGODB_URI
+              valueFrom: { secretKeyRef: { name: taca-app-secrets, key: CATALOG_MONGODB_URI } }
+            - { name: MONGODB_READ_PREFERENCE, value: primary }
+            - name: KAFKA_BROKERS
+              valueFrom: { configMapKeyRef: { name: taca-common, key: KAFKA_BROKERS } }
+            # Object storage: rclone serve s3 (ns rclone), key riêng trong Secret taca-catalog-s3
+            - { name: AWS_REGION, value: ap-southeast-1 }
+            - name: AWS_ACCESS_KEY_ID
+              valueFrom: { secretKeyRef: { name: taca-catalog-s3, key: AWS_ACCESS_KEY_ID, optional: true } }
+            - name: AWS_SECRET_ACCESS_KEY
+              valueFrom: { secretKeyRef: { name: taca-catalog-s3, key: AWS_SECRET_ACCESS_KEY, optional: true } }
+            - { name: AWS_S3_BUCKET, value: taca-product-media-dev }
+            - { name: AWS_S3_ENDPOINT, value: "http://rclone-s3.rclone.svc:8080" }
+            - { name: AWS_S3_PUBLIC_URL, value: "https://s3.thantancloud.id.vn" }
+            - { name: AWS_S3_FORCE_PATH_STYLE, value: "true" }
+          readinessProbe:
+            httpGet: { path: /health/ready, port: 3000 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          livenessProbe:
+            httpGet: { path: /health/live, port: 3000 }
+            initialDelaySeconds: 30
+            periodSeconds: 20
+          resources:
+            requests: { cpu: 50m, memory: 192Mi }
+            limits: { cpu: 500m, memory: 512Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: product-catalog-service
+  labels: { app: product-catalog-service, part-of: taca }
+spec:
+  selector: { app: product-catalog-service }
+  ports:
+    - { name: http, port: 3000, targetPort: 3000 }
