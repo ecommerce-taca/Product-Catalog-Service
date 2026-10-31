@@ -39,6 +39,12 @@ export interface ShopEventPayload {
   kyc_status?: string;
   kyc_case_id?: string;
   approved_at?: string;
+  /**
+   * Auth-user `shop.updated` (contract đã triển khai): field đổi nằm lồng trong `snapshot`
+   * (chỉ chứa field có trong `changed_fields`: `name`, `description`, `logo_object_key`).
+   */
+  snapshot?: { name?: string; description?: string; logo_object_key?: string };
+  changed_fields?: string[];
 }
 
 export interface ProcessShopEventResult {
@@ -62,6 +68,7 @@ export class ShopProjectionService {
   async handleShopEvent(
     event: KafkaEventEnvelope<ShopEventPayload>,
   ): Promise<ProcessShopEventResult> {
+    event = this.flattenAuthUserSnapshot(event);
     const shopId = event.payload?.shop_id || event.aggregate_id;
     if (!shopId) {
       throw new Error(`Invalid shop event ${event.event_id}: missing shop_id`);
@@ -256,5 +263,19 @@ export class ShopProjectionService {
     this.logger.log(
       `Emitted ${EVENT_PRODUCT_SHOP_SNAPSHOT_UPDATED} to outbox for shop=${params.shopId}`,
     );
+  }
+
+  /**
+   * Auth-user gửi `shop.updated` với tên mới ở `payload.snapshot.name`; projection đọc
+   * `payload.name` phẳng. Chỉ bổ sung khi payload chưa có `name`, không đổi event gốc.
+   */
+  private flattenAuthUserSnapshot(
+    event: KafkaEventEnvelope<ShopEventPayload>,
+  ): KafkaEventEnvelope<ShopEventPayload> {
+    const snapshotName = event.payload?.snapshot?.name;
+    if (typeof snapshotName !== 'string' || event.payload?.name !== undefined) {
+      return event;
+    }
+    return { ...event, payload: { ...event.payload, name: snapshotName } };
   }
 }

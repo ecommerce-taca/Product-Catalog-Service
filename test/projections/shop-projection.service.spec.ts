@@ -249,6 +249,79 @@ describe('ShopProjectionService', () => {
       expect(result.success).toBe(true);
       expect(mockOutboxRepo.saveEvent).not.toHaveBeenCalled();
     });
+
+    it('should read the new name from payload.snapshot as auth-user publishes it', async () => {
+      const existing = createMockSnapshotDoc();
+      mockShopRepo.findByShopId.mockResolvedValue(existing);
+      mockShopRepo.upsertSnapshot.mockImplementation((snap) =>
+        Promise.resolve(snap as ShopSnapshotDocument),
+      );
+
+      // Payload đúng như UpdateSellerShopService của user-auth-service phát ra.
+      const event: KafkaEventEnvelope<any> = {
+        event_id: 'evt-updated-auth',
+        event_type: EVENT_SHOP_UPDATED,
+        aggregate_type: 'SHOP',
+        aggregate_id: mockShopId,
+        occurred_at: '2026-10-31T08:30:00Z',
+        payload: {
+          shop_id: mockShopId,
+          changed_fields: ['name', 'description'],
+          snapshot: { name: 'Renamed By Seller', description: 'Mô tả mới' },
+          updated_at: '2026-10-31T08:30:00Z',
+          version: 3,
+        },
+      };
+
+      const result = await service.handleShopEvent(event);
+
+      expect(result.success).toBe(true);
+      expect(mockShopRepo.upsertSnapshot).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'Renamed By Seller',
+          slug: 'original-shop',
+          logo_url: 'https://cdn.example.com/logo.png',
+        }),
+        mockSession,
+      );
+      expect(mockOutboxRepo.saveEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event_type: EVENT_PRODUCT_SHOP_SNAPSHOT_UPDATED,
+          payload: expect.objectContaining({
+            name: 'Renamed By Seller',
+            old_name: 'Original Shop',
+          }),
+        }),
+        mockSession,
+      );
+    });
+
+    it('should keep a flat payload.name over payload.snapshot.name', async () => {
+      const existing = createMockSnapshotDoc();
+      mockShopRepo.findByShopId.mockResolvedValue(existing);
+      mockShopRepo.upsertSnapshot.mockImplementation((snap) =>
+        Promise.resolve(snap as ShopSnapshotDocument),
+      );
+
+      await service.handleShopEvent({
+        event_id: 'evt-updated-both',
+        event_type: EVENT_SHOP_UPDATED,
+        aggregate_type: 'SHOP',
+        aggregate_id: mockShopId,
+        occurred_at: '2026-10-31T08:40:00Z',
+        payload: {
+          shop_id: mockShopId,
+          name: 'Flat Name',
+          snapshot: { name: 'Nested' },
+          version: 4,
+        },
+      } as KafkaEventEnvelope<any>);
+
+      expect(mockShopRepo.upsertSnapshot).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'Flat Name' }),
+        mockSession,
+      );
+    });
   });
 
   describe('shop.status_changed', () => {
